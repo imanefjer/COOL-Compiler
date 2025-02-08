@@ -7,21 +7,78 @@ import (
 	"strconv"
 )
 
+// TODO: respect the convention
+const (
+	_ int = iota
+	LOWEST
+	ASSIGN      // <-
+	EQUALS      // =
+	LESSGREATER // <=, <
+	SUM         // +, -
+	PRODUCT     // *, /
+	PREFIX      // -X or !X
+	CALL        // myFunction(X)
+)
+
+var precedences = map[lexer.TokenType]int{
+	lexer.ASSIGN: ASSIGN,
+	lexer.EQ:     EQUALS,
+	lexer.LE:     LESSGREATER,
+	lexer.LT:     LESSGREATER,
+	lexer.PLUS:   SUM,
+	lexer.MINUS:  SUM,
+	lexer.TIMES:  PRODUCT,
+	lexer.DIVIDE: PRODUCT,
+}
+
+type (
+	prefixParseFn func() ast.Expression
+	infixParseFn  func(ast.Expression) ast.Expression
+)
+
 type Parser struct {
-	l         *lexer.Lexer
-	curToken  lexer.Token
-	peekToken lexer.Token
-	errors    []string
+	l              *lexer.Lexer
+	curToken       lexer.Token
+	peekToken      lexer.Token
+	errors         []string
+	prefixParseFns map[lexer.TokenType]prefixParseFn
+	infixParseFns  map[lexer.TokenType]infixParseFn
 }
 
 func New(l *lexer.Lexer) *Parser {
 	p := &Parser{
-		l:      l,
-		errors: []string{},
+		l:              l,
+		errors:         []string{},
+		prefixParseFns: make(map[lexer.TokenType]prefixParseFn),
+		infixParseFns:  make(map[lexer.TokenType]infixParseFn),
 	}
 
 	p.nextToken()
 	p.nextToken()
+
+	p.registerPrefix(lexer.INT_CONST, p.parseIntegerExpression)
+	p.registerPrefix(lexer.STR_CONST, p.parseStringExpression)
+	p.registerPrefix(lexer.BOOL_CONST, p.parseBoolExpression)
+	p.registerPrefix(lexer.OBJECTID, p.parseObjectIdentifier)
+	p.registerPrefix(lexer.LPAREN, p.parseGroupedExpression)
+	p.registerPrefix(lexer.IF, p.parseIfExpression)
+	p.registerPrefix(lexer.WHILE, p.parseWhileExpression)
+	p.registerPrefix(lexer.LET, p.parseLetExpression)
+	p.registerPrefix(lexer.CASE, p.parseCaseExpression)
+	p.registerPrefix(lexer.NEW, p.parseNewExpression)
+	p.registerPrefix(lexer.ISVOID, p.parseIsvoidExpression)
+	p.registerPrefix(lexer.NOT, p.parseNotExpression)
+	p.registerPrefix(lexer.NEG, p.parseNEGExpression)
+
+	p.registerInfix(lexer.PLUS, p.parseInfixExpression)
+	p.registerInfix(lexer.MINUS, p.parseInfixExpression)
+	p.registerInfix(lexer.TIMES, p.parseInfixExpression)
+	p.registerInfix(lexer.DIVIDE, p.parseInfixExpression)
+	p.registerInfix(lexer.LT, p.parseInfixExpression)
+	p.registerInfix(lexer.LE, p.parseInfixExpression)
+	p.registerInfix(lexer.EQ, p.parseInfixExpression)
+	p.registerInfix(lexer.ASSIGN, p.parseAssignment)
+
 	return p
 }
 
@@ -82,7 +139,6 @@ func (p *Parser) ParseProgram() *ast.Program {
 }
 
 func (p *Parser) ParseClass() *ast.Class {
-
 	c := &ast.Class{Token: p.curToken}
 	if !p.expectCurrent(lexer.CLASS) {
 		return nil
@@ -92,8 +148,7 @@ func (p *Parser) ParseClass() *ast.Class {
 		// Add errors
 		return nil
 	}
-
-	c.Name = p.curToken.Literal
+	c.Name = &ast.ObjectIdentifier{Token: p.curToken, Value: p.curToken.Literal}
 	if !p.expectAndPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -149,13 +204,14 @@ func (p *Parser) parseMethod() *ast.Method {
 	if !p.expectAndPeek(lexer.LBRACE) {
 		return nil
 	}
-	p.parseExpression()
+	p.parseExpression(LOWEST)
 	if !p.expectAndPeek(lexer.RBRACE) {
 		return nil
 	}
 
 	return m
 }
+
 func (p *Parser) parseFromal() *ast.Formal {
 	f := &ast.Formal{Token: p.curToken}
 	if !p.expectCurrent(lexer.OBJECTID) {
@@ -187,83 +243,54 @@ func (p *Parser) parseAttribute() *ast.Attribute {
 	a.Type = &ast.TypeIdentifier{Token: p.curToken, Value: p.curToken.Literal}
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken()
-		p.parseExpression()
+		p.parseExpression(LOWEST)
 	}
 	return a
 }
 
-func (p *Parser) parseExpression() ast.Expression {
+func (p *Parser) parseExpression(precedence int) ast.Expression {
+	prefix := p.prefixParseFns[p.curToken.Type]
+	if prefix == nil {
+		p.noPrefixParseFnError(p.curToken.Type)
+		return nil
+	}
+	leftExp := prefix()
 
-	if p.curTokenIs(lexer.LBRACE) {
-		return p.parseBlockExpression()
-	}
-	if p.curTokenIs(lexer.IF) {
-		return p.parseIfExpression()
-	}
-	if p.curTokenIs(lexer.WHILE) {
-		return p.parseWhileExpression()
-	}
-	if p.curTokenIs(lexer.LET) {
-		return p.parseLetExpression()
-	}
-	if p.curTokenIs(lexer.CASE) {
-		return p.parseCaseExpression()
-	}
-	if p.curTokenIs(lexer.NEW) {
-		return p.parseNewExpression()
-	}
-	if p.curTokenIs(lexer.ISVOID) {
-		return p.parseIsvoidExpression()
-	}
-	if p.curTokenIs(lexer.NOT) {
-		return p.parseNotExpression()
-	}
-	if p.curTokenIs(lexer.BOOL_CONST) {
-		return p.parseBoolExpression()
-	}
-	if p.curTokenIs(lexer.INT_CONST) {
-		return p.parseIntegerExpression()
-	}
-	if p.curTokenIs(lexer.STR_CONST) {
-		return p.parseStringExpression()
-	}
-	if p.curTokenIs(lexer.OBJECTID) {
-		if p.peekTokenIs(lexer.LPAREN) {
-			return p.parseMethodCall()
-		} else if p.peekTokenIs(lexer.ASSIGN) {
-			return p.parseAssignment()
-		} else {
-			return p.parseObjectIdentifier()
+	for !p.peekTokenIs(lexer.SEMI) && precedence < p.peekPrecedence() {
+		infix := p.infixParseFns[p.peekToken.Type]
+		if infix == nil {
+			return leftExp
 		}
+
+		p.nextToken()
+
+		leftExp = infix(leftExp)
 	}
-	if p.curTokenIs(lexer.LPAREN) {
-		return p.parseExpression()
+
+	return leftExp
+}
+
+func (p *Parser) parseGroupedExpression() ast.Expression {
+	p.nextToken()
+	exp := p.parseExpression(LOWEST)
+	if !p.expectAndPeek(lexer.RPAREN) {
+		return nil
 	}
-	if p.curTokenIs(lexer.NEG) {
-		return p.parseNEGExpression()
+	return exp
+}
+
+func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
+	exp := &ast.InfixExpression{
+		Token:    p.curToken,
+		Operator: p.curToken.Literal,
+		Left:     left,
 	}
-	if p.curTokenIs(lexer.LT) {
-		return p.parseLTExpression()
-	}
-	if p.curTokenIs(lexer.LE) {
-		return p.parseLEExpression()
-	}
-	if p.curTokenIs(lexer.EQ) {
-		return p.parseEQExpression()
-	}
-	if p.curTokenIs(lexer.PLUS) {
-		return p.parsePlusExpression()
-	}
-	if p.curTokenIs(lexer.MINUS) {
-		return p.parseMinusExpression()
-	}
-	if p.curTokenIs(lexer.TIMES) {
-		return p.parseTimesExpression()
-	}
-	if p.curTokenIs(lexer.DIVIDE) {
-		return p.parseDivideExpression()
-	}
-	return nil
+
+	precedence := p.curPrecedence()
+	p.nextToken()
+	exp.Right = p.parseExpression(precedence)
+
+	return exp
 }
 
 func (p *Parser) parseBlockExpression() *ast.BlockExpression {
@@ -273,7 +300,7 @@ func (p *Parser) parseBlockExpression() *ast.BlockExpression {
 	}
 	for !p.peekTokenIs(lexer.RBRACE) {
 		p.nextToken()
-		be.Expressions = append(be.Expressions, p.parseExpression())
+		be.Expressions = append(be.Expressions, p.parseExpression(LOWEST))
 		if !p.expectAndPeek(lexer.SEMI) {
 			break
 		}
@@ -290,15 +317,15 @@ func (p *Parser) parseIfExpression() *ast.IfExpression {
 		return nil
 	}
 	p.nextToken()
-	ife.Condition = p.parseExpression()
+	ife.Condition = p.parseExpression(LOWEST)
 	if !p.expectAndPeek(lexer.THEN) {
 		return nil
 	}
 	p.nextToken()
-	ife.Consequence = p.parseExpression()
+	ife.Consequence = p.parseExpression(LOWEST)
 	if p.peekTokenIs(lexer.ELSE) {
 		p.nextToken()
-		ife.Alternative = p.parseExpression()
+		ife.Alternative = p.parseExpression(LOWEST)
 	}
 	if !p.expectAndPeek(lexer.FI) {
 		return nil
@@ -312,12 +339,12 @@ func (p *Parser) parseWhileExpression() *ast.WhileExpression {
 		return nil
 	}
 	p.nextToken()
-	we.Condition = p.parseExpression()
+	we.Condition = p.parseExpression(LOWEST)
 	if !p.expectAndPeek(lexer.LOOP) {
 		return nil
 	}
 	p.nextToken()
-	we.Body = p.parseExpression()
+	we.Body = p.parseExpression(LOWEST)
 	if !p.expectAndPeek(lexer.POOL) {
 		return nil
 	}
@@ -342,7 +369,7 @@ func (p *Parser) parseLetExpression() *ast.LetExpression {
 	le.Type = &ast.TypeIdentifier{Token: p.curToken, Value: p.curToken.Literal}
 	if p.peekTokenIs(lexer.ASSIGN) {
 		p.nextToken()
-		le.Init = p.parseExpression()
+		le.Init = p.parseExpression(LOWEST)
 	}
 
 	for !p.peekTokenIs(lexer.IN) {
@@ -353,14 +380,14 @@ func (p *Parser) parseLetExpression() *ast.LetExpression {
 		le.Formals = append(le.Formals, p.parseFromal())
 		if p.peekTokenIs(lexer.ASSIGN) {
 			p.nextToken()
-			p.parseExpression()
+			p.parseExpression(LOWEST)
 		}
 	}
 	if !p.expectAndPeek(lexer.IN) {
 		return nil
 	}
 	p.nextToken()
-	le.Body = p.parseExpression()
+	le.Body = p.parseExpression(LOWEST)
 	return le
 }
 
@@ -370,7 +397,7 @@ func (p *Parser) parseCaseExpression() *ast.CaseExpression {
 	}
 	ce := &ast.CaseExpression{Token: p.curToken}
 	p.nextToken()
-	ce.Expression = p.parseExpression()
+	ce.Expression = p.parseExpression(LOWEST)
 	if !p.expectAndPeek(lexer.OF) {
 		return nil
 	}
@@ -412,7 +439,7 @@ func (p *Parser) parseCase() *ast.Case {
 		return nil
 	}
 	p.nextToken()
-	c.Expression = p.parseExpression()
+	c.Expression = p.parseExpression(LOWEST)
 	return c
 }
 
@@ -428,13 +455,13 @@ func (p *Parser) parseNewExpression() *ast.NewExpression {
 	return ne
 }
 
-func (p *Parser) parseIsvoidExpression() *ast.IsvoidExpression {
-	ie := &ast.IsvoidExpression{Token: p.curToken}
+func (p *Parser) parseIsvoidExpression() *ast.IsVoidExpression {
+	ie := &ast.IsVoidExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.ISVOID) {
 		return nil
 	}
 	p.nextToken()
-	ie.Expression = p.parseExpression()
+	ie.Expression = p.parseExpression(LOWEST)
 	return ie
 }
 
@@ -444,18 +471,18 @@ func (p *Parser) parseNotExpression() *ast.NotExpression {
 		return nil
 	}
 	p.nextToken()
-	ne.Expression = p.parseExpression()
+	ne.Expression = p.parseExpression(LOWEST)
 	return ne
 }
 
-func (p *Parser) parseBoolExpression() *ast.BoolExpression {
-	be := &ast.BoolExpression{Token: p.curToken}
+func (p *Parser) parseBoolExpression() *ast.BooleanLiteral {
+	be := &ast.BooleanLiteral{Token: p.curToken}
 	be.Value = p.curToken.Literal == "true"
 	return be
 }
 
-func (p *Parser) parseIntegerExpression() *ast.IntExpression {
-	ie := &ast.IntExpression{Token: p.curToken}
+func (p *Parser) parseIntegerExpression() *ast.IntegerLiteral {
+	ie := &ast.IntegerLiteral{Token: p.curToken}
 	value, err := strconv.Atoi(p.curToken.Literal)
 	if err != nil {
 		p.errors = append(p.errors, fmt.Sprintf("could not parse integer: %v", p.curToken.Literal))
@@ -465,8 +492,8 @@ func (p *Parser) parseIntegerExpression() *ast.IntExpression {
 	return ie
 }
 
-func (p *Parser) parseStringExpression() *ast.StringExpression {
-	se := &ast.StringExpression{Token: p.curToken}
+func (p *Parser) parseStringExpression() *ast.StringLiteral {
+	se := &ast.StringLiteral{Token: p.curToken}
 	se.Value = p.curToken.Literal
 	return se
 }
@@ -485,7 +512,7 @@ func (p *Parser) parseMethodCall() *ast.MethodCall {
 	}
 	for !p.peekTokenIs(lexer.RPAREN) {
 		p.nextToken()
-		mc.Arguments = append(mc.Arguments, p.parseExpression())
+		mc.Arguments = append(mc.Arguments, p.parseExpression(LOWEST))
 		if !p.expectAndPeek(lexer.COMMA) {
 			break
 		}
@@ -496,14 +523,14 @@ func (p *Parser) parseMethodCall() *ast.MethodCall {
 	return mc
 }
 
-func (p *Parser) parseAssignment() *ast.Assignment {
+func (p *Parser) parseAssignment(left ast.Expression) ast.Expression {
 	a := &ast.Assignment{Token: p.curToken}
 	a.Name = &ast.ObjectIdentifier{Token: p.curToken, Value: p.curToken.Literal}
 	if !p.expectAndPeek(lexer.ASSIGN) {
 		return nil
 	}
 	p.nextToken()
-	a.Expression = p.parseExpression()
+	a.Expression = p.parseExpression(LOWEST)
 	return a
 }
 
@@ -513,91 +540,109 @@ func (p *Parser) parseNEGExpression() *ast.NegExpression {
 		return nil
 	}
 	p.nextToken()
-	ne.Expression = p.parseExpression()
+	ne.Expression = p.parseExpression(LOWEST)
 	return ne
 }
 
-func (p *Parser) parseLTExpression() *ast.LTExpression {
+func (p *Parser) parseLTExpression(left ast.Expression) ast.Expression {
 	lt := &ast.LTExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.LT) {
 		return nil
 	}
 	p.nextToken()
-	lt.Left = p.parseExpression()
-	p.nextToken()
-	lt.Right = p.parseExpression()
+	lt.Left = left
+	lt.Right = p.parseExpression(LOWEST)
 	return lt
 }
 
-func (p *Parser) parseLEExpression() *ast.LEExpression {
+func (p *Parser) parseLEExpression(left ast.Expression) ast.Expression {
 	le := &ast.LEExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.LE) {
 		return nil
 	}
 	p.nextToken()
-	le.Left = p.parseExpression()
-	p.nextToken()
-	le.Right = p.parseExpression()
+	le.Left = left
+	le.Right = p.parseExpression(LOWEST)
 	return le
 }
 
-func (p *Parser) parseEQExpression() *ast.EQExpression {
+func (p *Parser) parseEQExpression(left ast.Expression) ast.Expression {
 	eq := &ast.EQExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.EQ) {
 		return nil
 	}
 	p.nextToken()
-	eq.Left = p.parseExpression()
-	p.nextToken()
-	eq.Right = p.parseExpression()
+	eq.Left = left
+	eq.Right = p.parseExpression(LOWEST)
 	return eq
 }
 
-func (p *Parser) parsePlusExpression() *ast.PlusExpression {
+func (p *Parser) parsePlusExpression(left ast.Expression) ast.Expression {
 	pe := &ast.PlusExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.PLUS) {
 		return nil
 	}
 	p.nextToken()
-	pe.Left = p.parseExpression()
-	p.nextToken()
-	pe.Right = p.parseExpression()
+	pe.Left = left
+	pe.Right = p.parseExpression(LOWEST)
 	return pe
 }
 
-func (p *Parser) parseMinusExpression() *ast.MinusExpression {
+func (p *Parser) parseMinusExpression(left ast.Expression) ast.Expression {
 	me := &ast.MinusExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.MINUS) {
 		return nil
 	}
 	p.nextToken()
-	me.Left = p.parseExpression()
-	p.nextToken()
-	me.Right = p.parseExpression()
+	me.Left = left
+	me.Right = p.parseExpression(LOWEST)
 	return me
 }
 
-func (p *Parser) parseTimesExpression() *ast.TimesExpression {
+func (p *Parser) parseTimesExpression(left ast.Expression) ast.Expression {
 	te := &ast.TimesExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.TIMES) {
 		return nil
 	}
 	p.nextToken()
-	te.Left = p.parseExpression()
-	p.nextToken()
-	te.Right = p.parseExpression()
+	te.Left = left
+	te.Right = p.parseExpression(LOWEST)
 	return te
 }
 
-func (p *Parser) parseDivideExpression() *ast.DivideExpression {
+func (p *Parser) parseDivideExpression(left ast.Expression) ast.Expression {
 	de := &ast.DivideExpression{Token: p.curToken}
 	if !p.expectCurrent(lexer.DIVIDE) {
 		return nil
 	}
 	p.nextToken()
-	de.Left = p.parseExpression()
-	p.nextToken()
-	de.Right = p.parseExpression()
+	de.Left = left
+	de.Right = p.parseExpression(LOWEST)
 	return de
 }
 
+func (p *Parser) peekPrecedence() int {
+	if p, ok := precedences[p.peekToken.Type]; ok {
+		return p
+	}
+	return LOWEST
+}
+
+func (p *Parser) curPrecedence() int {
+	if p, ok := precedences[p.curToken.Type]; ok {
+		return p
+	}
+	return LOWEST
+}
+
+func (p *Parser) registerPrefix(tokenType lexer.TokenType, fn prefixParseFn) {
+	p.prefixParseFns[tokenType] = fn
+}
+
+func (p *Parser) registerInfix(tokenType lexer.TokenType, fn infixParseFn) {
+	p.infixParseFns[tokenType] = fn
+}
+
+func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
+	p.errors = append(p.errors, fmt.Sprintf("no prefix parse function for %s found", t))
+}

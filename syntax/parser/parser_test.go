@@ -53,7 +53,7 @@ func TestClassParser(t *testing.T) {
 
 	for i, tt := range tests {
 		parser := newParserFromInput(tt.input)
-		class := parser.parseClass()
+		class := parser.ParseClass()
 
 		checkParserErrors(t, parser, i)
 
