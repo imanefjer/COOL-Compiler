@@ -67,9 +67,21 @@ const (
 )
 
 func (tt TokenType) String() string {
-	return [...]string{"EOF", "ERROR", "CLASS", "INHERITS", "ISVOID", "IF", "ELSE", "FI", "THEN", "LET", "IN", "WHILE", "CASE", "ESCA", "LOOP", "POOL",
-		"NEW", "OF", "NOT", "STR_CONST", "BOOL_CONST", "INT_CONST", "TYPEID", "OBJECTID", "ASSIGN", "DARROW", "LT", "LE", "EQ", "PLUS", "MINUS", "TIMES",
-		"DIVIDE", "LPAREN", "RPAREN", "LBRACE", "RBACE", "SEMI", "COLON", "COMMA", "DOT", "AT", "NEG"}[tt]
+	return [...]string{
+		"EOF", "ERROR",
+		// Keywords
+		"CLASS", "INHERITS", "ISVOID", "IF", "ELSE", "FI", "THEN",
+		"LET", "IN", "WHILE", "CASE", "ESAC", "LOOP", "POOL",
+		"NEW", "OF", "NOT",
+		// Data types
+		"STR_CONST", "BOOL_CONST", "INT_CONST",
+		// Identifiers
+		"TYPEID", "OBJECTID",
+		// Operators and Punctuation
+		"ASSIGN", "DARROW", "LT", "LE", "EQ", "PLUS", "MINUS",
+		"TIMES", "DIVIDE", "LPAREN", "RPAREN", "LBRACE", "RBRACE",
+		"SEMI", "COLON", "COMMA", "DOT", "AT", "NEG",
+	}[tt]
 }
 
 // Token represents a lexical token with its type, value, and position.
@@ -159,13 +171,19 @@ func (l *Lexer) readIdentifier() string {
 
 func (l *Lexer) readString() (string, error) {
 	var sb strings.Builder
-	l.readChar()
+	startLine := l.line
+	startCol := l.column
+
+	l.readChar() // consume opening quote
 	for l.char != '"' {
 		if l.char == 0 {
-			return "", fmt.Errorf("EOF in string constant")
+			return "", fmt.Errorf("EOF in string constant at line %d, column %d", startLine, startCol)
 		}
 		if l.char == '\n' {
-			return "", fmt.Errorf("Unterminitaed string constant")
+			return "", fmt.Errorf("Unterminated string constant at line %d, column %d", startLine, startCol)
+		}
+		if l.char == '\000' {
+			return "", fmt.Errorf("String constant contains null character at line %d, column %d", l.line, l.column)
 		}
 
 		if l.char == '\\' {
@@ -179,12 +197,12 @@ func (l *Lexer) readString() (string, error) {
 				sb.WriteRune('\n')
 			case 'f':
 				sb.WriteRune('\f')
+			case '0':
+				return "", fmt.Errorf("String constant contains escaped null character at line %d, column %d", l.line, l.column)
 			case '\\':
 				sb.WriteRune('\\')
 			case '"':
 				sb.WriteRune('"')
-			case '0':
-				sb.WriteRune(0)
 			default:
 				sb.WriteRune(l.char)
 			}
@@ -195,8 +213,45 @@ func (l *Lexer) readString() (string, error) {
 		l.readChar()
 	}
 
-	l.readChar()
-	return sb.String(), nil
+	str := sb.String()
+	if len(str) > 1024 {
+		return "", fmt.Errorf("String constant too long (max 1024 chars) at line %d, column %d", startLine, startCol)
+	}
+
+	l.readChar() // consume closing quote
+	return str, nil
+}
+
+// Add support for both single-line and multi-line comments
+func (l *Lexer) skipComment() {
+	if l.char == '-' && l.peekChar() == '-' { // Single-line comment
+		l.readChar() // consume first -
+		l.readChar() // consume second -
+		for l.char != '\n' && l.char != 0 {
+			l.readChar()
+		}
+		if l.char == '\n' {
+			l.readChar() // consume the newline
+		}
+	} else if l.char == '(' && l.peekChar() == '*' { // Multi-line comment
+		l.readChar() // consume (
+		l.readChar() // consume *
+		nesting := 1
+
+		for nesting > 0 && l.char != 0 {
+			if l.char == '(' && l.peekChar() == '*' {
+				l.readChar() // consume (
+				l.readChar() // consume *
+				nesting++
+			} else if l.char == '*' && l.peekChar() == ')' {
+				l.readChar() // consume *
+				l.readChar() // consume )
+				nesting--
+			} else {
+				l.readChar()
+			}
+		}
+	}
 }
 
 func (l *Lexer) NextToken() Token {
@@ -212,9 +267,14 @@ func (l *Lexer) NextToken() Token {
 		tok.Type = EOF
 		tok.Literal = ""
 	case l.char == '(':
-		tok.Type = LPAREN
-		tok.Literal = "("
-		l.readChar()
+		if l.peekChar() == '*' {
+			l.skipComment()
+			return l.NextToken()
+		} else {
+			tok.Type = LPAREN
+			tok.Literal = "("
+			l.readChar()
+		}
 	case l.char == ')':
 		tok.Type = RPAREN
 		tok.Literal = ")"
@@ -248,24 +308,18 @@ func (l *Lexer) NextToken() Token {
 		tok.Literal = "*"
 		l.readChar()
 	case l.char == '-':
-		tok.Type = MINUS
-		tok.Literal = "-"
-		l.readChar()
-	// This could be a comment or a divide
-	// TODO: add support for Multi line comment
-	case l.char == '/':
-		if l.peekChar() == '/' {
-			// This is a single line comment
-			for l.char != '\n' && l.char != 0 {
-				l.readChar()
-			}
-			return l.NextToken() // Skip the comment and get the next token
+		if l.peekChar() == '-' {
+			l.skipComment()
+			return l.NextToken()
 		} else {
-			tok.Type = DIVIDE
-			tok.Literal = "/"
+			tok.Type = MINUS
+			tok.Literal = "-"
 			l.readChar()
 		}
-
+	case l.char == '/':
+		tok.Type = DIVIDE
+		tok.Literal = "/"
+		l.readChar()
 	case l.char == '~':
 		tok.Type = NEG
 		tok.Literal = "~"
@@ -327,6 +381,10 @@ func (l *Lexer) NextToken() Token {
 		// Handle keywords
 		case "class":
 			tok.Type = CLASS
+		case "inherits":
+			tok.Type = INHERITS
+		case "isvoid":
+			tok.Type = ISVOID
 		case "if":
 			tok.Type = IF
 		case "fi":
@@ -351,10 +409,6 @@ func (l *Lexer) NextToken() Token {
 			tok.Type = LET
 		case "in":
 			tok.Type = IN
-		case "inherits":
-			tok.Type = INHERITS
-		case "isvoid":
-			tok.Type = ISVOID
 		case "new":
 			tok.Type = NEW
 		case "not":
@@ -364,10 +418,10 @@ func (l *Lexer) NextToken() Token {
 			tok.Type = BOOL_CONST
 		default:
 			if unicode.IsUpper(rune(identifier[0])) {
-				// Types are all starting with an upper case.
+				// Types are all starting with an upper case
 				tok.Type = TYPEID
 			} else {
-				// If not a type then its an object.
+				// If not a type then its an object
 				tok.Type = OBJECTID
 			}
 		}
