@@ -63,7 +63,7 @@ func (sa *SemanticAnalyser) Analyze(program *ast.Program) {
 func (sa *SemanticAnalyser) typeCheck(program *ast.Program) {
 	for _, class := range program.Classes {
 		st := sa.globalSymbolTable.symbols[class.Name.Value].Scope
-		sa.typeCheckClass(&class, st)
+		sa.typeCheckClass(class, st)
 	}
 }
 
@@ -80,6 +80,8 @@ func (sa *SemanticAnalyser) typeCheckClass(cls *ast.Class, st *SymbolTable) {
 
 func (sa *SemanticAnalyser) typeCheckAttribute(attribute *ast.Attribute, st *SymbolTable) {
 	if attribute.Expression != nil {
+
+		// TODO type conformant
 		expressionType := sa.getExpressionType(attribute.Expression, st)
 		if expressionType != attribute.TypeDecl.Value {
 			sa.errors = append(sa.errors, fmt.Sprintf("attribute %s cannot be of type %s, expected %s", attribute.Name.Value, expressionType, attribute.TypeDecl.Value))
@@ -106,8 +108,19 @@ func (sa *SemanticAnalyser) typeCheckMethod(method *ast.Method, st *SymbolTable)
 }
 
 func (sa *SemanticAnalyser) isTypeConformant(type1, type2 string) bool {
-	return type1 == type2
-	// TODO: handle inheritance when implemented
+	return type1 == type2 || sa.isAncestor(type1, type2)
+}
+
+func (sa *SemanticAnalyser) isAncestor(type1, type2 string) bool {
+	if type1 == type2 {
+		return true
+	}
+	entry, ok := sa.globalSymbolTable.Lookup(type2)
+	if !ok || entry == nil {
+		return false
+	}
+	parentType := entry.Token.Literal
+	return sa.isAncestor(type1, parentType)
 }
 
 func (sa *SemanticAnalyser) getExpressionType(expression ast.Expression, st *SymbolTable) string {
@@ -218,7 +231,11 @@ func (sa *SemanticAnalyser) buildSymboltables(program *ast.Program) {
 }
 
 func (sa *SemanticAnalyser) GetNewExpressionType(ne *ast.NewExpression, st *SymbolTable) string {
-	// TODO: handle SELF_TYPE when implemented
+	if ne.Type.Value == "SELF_TYPE" {
+		// Assuming the current class type is stored in the symbol table under "self"
+		selfEntry, _ := st.Lookup("self")
+		return selfEntry.Type
+	}
 	if _, ok := sa.globalSymbolTable.Lookup(ne.Type.Value); !ok {
 		sa.errors = append(sa.errors, fmt.Sprintf("undefined type %s in new expression", ne.Type.Value))
 		return "Object"
@@ -241,8 +258,16 @@ func (sa *SemanticAnalyser) CheckBindingType(b *ast.Binding, st *SymbolTable) {
 }
 
 func (sa *SemanticAnalyser) GetAssignmentExpressionType(a *ast.Assignment, st *SymbolTable) string {
-	// TODO: look for object in symbol table walking the scope and then check type
-	return ""
+	entry, ok := st.Lookup(a.Name.Value)
+	if (!ok) {
+		sa.errors = append(sa.errors, fmt.Sprintf("undefined variable %s in assignment", a.Name.Value))
+		return "Object"
+	}
+	exprType := sa.getExpressionType(a.Expression, st)
+	if !sa.isTypeConformant(exprType, entry.Type) {
+		sa.errors = append(sa.errors, fmt.Sprintf("type mismatch in assignment to %s: expected %s, found %s", a.Name.Value, entry.Type, exprType))
+	}
+	return exprType
 }
 
 func (sa *SemanticAnalyser) GetUnaryExpressionType(uexpr *ast.UnaryExpression, st *SymbolTable) string {
@@ -289,6 +314,55 @@ func (sa *SemanticAnalyser) GetBinaryExpressionType(be *ast.BinaryExpression, st
 }
 
 func (sa *SemanticAnalyser) GetCaseExpressionType(ce *ast.CaseExpression, st *SymbolTable) string {
-	// TODO: Handle case expression correctly. It requires returning the LCA type of all its sub expressions
+	caseTypes := []string{}
+	for _, c := range ce.Cases {
+		caseType := sa.getExpressionType(c.Expression, st)
+		caseTypes = append(caseTypes, caseType)
+	}
+
+	if len(caseTypes) == 0 {
+		return "Object"
+	}
+
+	lcaType := caseTypes[0]
+	for _, t := range caseTypes[1:] {
+		lcaType = sa.findLCA(lcaType, t)
+	}
+
+	return lcaType
+}
+// lowest common ancestor
+func (sa *SemanticAnalyser) findLCA(type1, type2 string) string {
+	if type1 == type2 {
+		return type1
+	}
+
+	ancestors1 := sa.getAncestors(type1)
+	ancestors2 := sa.getAncestors(type2)
+
+	for _, a1 := range ancestors1 {
+		for _, a2 := range ancestors2 {
+			if a1 == a2 {
+				return a1
+			}
+		}
+	}
+
 	return "Object"
+}
+
+func (sa *SemanticAnalyser) getAncestors(t string) []string {
+	ancestors := []string{}
+	currentType := t
+
+	for currentType != "" {
+		ancestors = append(ancestors, currentType)
+		entry, ok := sa.globalSymbolTable.Lookup(currentType)
+		if !ok || entry == nil {
+			break
+		}
+		currentType = entry.Token.Literal
+	}
+
+	return ancestors
 }

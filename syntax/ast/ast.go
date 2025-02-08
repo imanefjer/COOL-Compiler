@@ -46,8 +46,9 @@ func (p *Program) TokenLiteral() string { return "" }
 
 type Class struct {
 	Token    lexer.Token
-	Name     string
+	Name     *ObjectIdentifier
 	Features []Feature
+	//parent : typeidentifier
 }
 
 func (c *Class) TokenLiteral() string { return c.Token.Literal }
@@ -115,7 +116,7 @@ type LetExpression struct {
 	Init	 Expression
 	Formals  []*Formal
 	Body     Expression
-}
+} 
 
 func (le *LetExpression) TokenLiteral() string { return le.Token.Literal }
 func (le *LetExpression) expressionNode()      {}
@@ -149,13 +150,13 @@ func (ne *NewExpression) TokenLiteral() string { return ne.Token.Literal }
 func (ne *NewExpression) expressionNode()      {}
 
 //isvoid Expression
-type IsvoidExpression struct {
+type IsVoidExpression struct {
 	Token       lexer.Token
 	Expression  Expression
 }
 
-func (ie *IsvoidExpression) TokenLiteral() string { return ie.Token.Literal }
-func (ie *IsvoidExpression) expressionNode()      {}
+func (ie *IsVoidExpression) TokenLiteral() string { return ie.Token.Literal }
+func (ie *IsVoidExpression) expressionNode()      {}
 
 //not Expression
 type NotExpression struct {
@@ -169,32 +170,32 @@ func (ne *NotExpression) expressionNode()      {}
 
 //bool Expression
 
-type BoolExpression struct {
+type BooleanLiteral struct {
 	Token       lexer.Token
 	Value       bool
 }
 
-func (be *BoolExpression) TokenLiteral() string { return be.Token.Literal }
-func (be *BoolExpression) expressionNode()      {}
+func (be *BooleanLiteral) TokenLiteral() string { return be.Token.Literal }
+func (be *BooleanLiteral) expressionNode()      {}
 
 //int Expression
-type IntExpression struct {
+type IntegerLiteral struct {
 	Token       lexer.Token
 	Value       int
 }
 
-func (ie *IntExpression) TokenLiteral() string { return ie.Token.Literal }
-func (ie *IntExpression) expressionNode()      {}
+func (ie *IntegerLiteral) TokenLiteral() string { return ie.Token.Literal }
+func (ie *IntegerLiteral) expressionNode()      {}
 
 
 //string Expression
-type StringExpression struct {
+type StringLiteral struct {
 	Token       lexer.Token
 	Value      string
 }
 
-func (se *StringExpression) TokenLiteral() string { return se.Token.Literal }
-func (se *StringExpression) expressionNode()      {}
+func (se *StringLiteral) TokenLiteral() string { return se.Token.Literal }
+func (se *StringLiteral) expressionNode()      {}
 
 //method call
 type MethodCall struct {
@@ -297,4 +298,15 @@ type DivideExpression struct {
 
 func (de *DivideExpression) TokenLiteral() string { return de.Token.Literal }
 func (de *DivideExpression) expressionNode()      {}
+
+
+type InfixExpression struct {
+	Token    lexer.Token 
+	Left     Expression
+	Operator string
+	Right    Expression
+}
+
+func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Literal }
+func (ie *InfixExpression) expressionNode()      {}
 
