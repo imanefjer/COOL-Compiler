@@ -1,0 +1,24 @@
+-- Valid: Let shadowing
+
+class Parent {
+    method() : Object {
+        if true then 1 else 2 fi
+    };
+};
+
+class Child inherits Parent {
+    method() : Object {
+        if true then 1 else 2 fi
+    };
+};
+
+class Main {
+    main(): Int {
+        {
+(new Child)@Parent.method();
+        let x: Int <- 5 in
+            let x: Int <- 10 in x;
+        }
+        
+    };
+};

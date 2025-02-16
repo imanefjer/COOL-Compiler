@@ -1,0 +1,351 @@
+package semant
+
+import (
+	"cool-compiler/ast"
+	"cool-compiler/lexer"
+	"strings"
+	"testing"
+)
+
+func TestSemanticAnalysis(t *testing.T) {
+	dummyToken := lexer.Token{Type: lexer.OBJECTID, Literal: "dummy"}
+
+	t.Run("Class Validation", func(t *testing.T) {
+		t.Run("Basic Inheritance Error", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name:   &ast.ObjectIdentifier{Value: "Bad", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+						},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertErrorsContain(t, sa.Errors(), "cannot inherit from Int")
+		})
+	})
+
+	t.Run("Method Validation", func(t *testing.T) {
+		t.Run("Invalid Method Override", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name: &ast.ObjectIdentifier{Value: "Parent", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name: &ast.ObjectIdentifier{Value: "test", Token: dummyToken},
+							Parameters: []*ast.Formal{
+								{Name: &ast.ObjectIdentifier{Value: "x", Token: dummyToken},
+									Type: &ast.TypeIdentifier{Value: "Int", Token: dummyToken}},
+							},
+							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+						},
+					},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "Child", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "Parent", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name: &ast.ObjectIdentifier{Value: "test", Token: dummyToken},
+							Parameters: []*ast.Formal{
+								{Name: &ast.ObjectIdentifier{Value: "x", Token: dummyToken},
+									Type: &ast.TypeIdentifier{Value: "String", Token: dummyToken}},
+							},
+							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+						},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertErrorsContain(t, sa.Errors(), "parameter 1 type mismatch")
+		})
+	})
+
+	t.Run("Expression Validation", func(t *testing.T) {
+		t.Run("Invalid Arithmetic Operation", func(t *testing.T) {
+			expr := &ast.BinaryExpression{
+				Token:    dummyToken,
+				Left:     &ast.BooleanLiteral{Value: true, Token: dummyToken},
+				Operator: "+",
+				Right:    &ast.IntegerLiteral{Value: 5, Token: dummyToken},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(expr, "Main")
+			assertErrorsContain(t, sa.Errors(), "Int operands")
+		})
+
+		t.Run("Valid Let Expression", func(t *testing.T) {
+			letExpr := &ast.LetExpression{
+				Token: dummyToken,
+				Bindings: []*ast.Binding{
+					{
+						Name: &ast.ObjectIdentifier{Value: "x", Token: dummyToken},
+						Type: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+						Init: &ast.IntegerLiteral{Value: 5, Token: dummyToken},
+					},
+				},
+				Body: &ast.ObjectIdentifier{Value: "x", Token: dummyToken},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(letExpr, "Main")
+			assertNoErrors(t, sa.Errors())
+		})
+	})
+
+	t.Run("Type Conformance", func(t *testing.T) {
+		t.Run("Invalid Assignment Type", func(t *testing.T) {
+			cls := &ast.Class{
+				Name: &ast.ObjectIdentifier{Value: "Test", Token: dummyToken},
+				Features: []ast.Feature{
+					&ast.Attribute{
+						Name: &ast.ObjectIdentifier{Value: "count", Token: dummyToken},
+						Type: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+						Init: &ast.StringLiteral{Value: "hello", Token: dummyToken},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: []*ast.Class{cls}})
+			assertErrorsContain(t, sa.Errors(), "does not conform")
+		})
+	})
+
+	t.Run("Case Expression Validation", func(t *testing.T) {
+		t.Run("Missing Object Branch", func(t *testing.T) {
+			caseExpr := &ast.CaseExpression{
+				Expression: &ast.IntegerLiteral{Value: 5, Token: dummyToken},
+				Cases: []*ast.Case{
+					{
+						Name: &ast.ObjectIdentifier{Value: "x", Token: dummyToken},
+						Type: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(caseExpr, "Main")
+			assertErrorsContain(t, sa.Errors(), "Object branch")
+		})
+	})
+
+	t.Run("Method Dispatch", func(t *testing.T) {
+		t.Run("Undefined Method Call", func(t *testing.T) {
+			methodCall := &ast.MethodCall{
+				Method: &ast.ObjectIdentifier{Value: "undefined", Token: dummyToken},
+				Object: &ast.NewExpression{
+					Type: &ast.TypeIdentifier{Value: "Main", Token: dummyToken},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(methodCall, "Main")
+			assertErrorsContain(t, sa.Errors(), "undefined method")
+		})
+	})
+
+	t.Run("SELF_TYPE Handling", func(t *testing.T) {
+		t.Run("Valid SELF_TYPE Return", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name: &ast.ObjectIdentifier{Value: "Main", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+						},
+					},
+				},
+				{
+					Name: &ast.ObjectIdentifier{Value: "Test", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "copy", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "SELF_TYPE", Token: dummyToken},
+							Body:       &ast.ObjectIdentifier{Value: "self", Token: dummyToken},
+						},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertNoErrors(t, sa.Errors())
+		})
+	})
+	t.Run("Static Dispatch", func(t *testing.T) {
+		t.Run("Valid Parent Method Dispatch", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name: &ast.ObjectIdentifier{Value: "Main", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+						},
+					},
+				},
+				{
+					Name: &ast.ObjectIdentifier{Value: "Parent", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "create", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Parent", Token: dummyToken},
+						},
+					},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "Child", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "Parent", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "create", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Child", Token: dummyToken},
+						},
+					},
+				},
+			}
+
+			methodCall := &ast.MethodCall{
+				Object: &ast.NewExpression{Type: &ast.TypeIdentifier{Value: "Child"}},
+				Type:   &ast.TypeIdentifier{Value: "Parent"},
+				Method: &ast.ObjectIdentifier{Value: "create"},
+			}
+
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			sa.analyzeExpression(methodCall, "Child")
+			assertNoErrors(t, sa.Errors())
+		})
+	})
+
+	t.Run("Control Flow Structures", func(t *testing.T) {
+		t.Run("If Expression Type Validation", func(t *testing.T) {
+			ifExpr := &ast.IfExpression{
+				Condition:   &ast.IntegerLiteral{Value: 5}, // Invalid non-bool condition
+				Consequence: &ast.IntegerLiteral{Value: 10},
+				Alternative: &ast.IntegerLiteral{Value: 20},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(ifExpr, "Main")
+			assertErrorsContain(t, sa.Errors(), "must be Bool")
+		})
+
+		t.Run("While Loop Validation", func(t *testing.T) {
+			whileExpr := &ast.WhileExpression{
+				Condition: &ast.BooleanLiteral{Value: true},
+				Body:      &ast.IntegerLiteral{Value: 42},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(whileExpr, "Main")
+			assertNoErrors(t, sa.Errors())
+		})
+	})
+
+	t.Run("Attribute Initialization", func(t *testing.T) {
+		t.Run("Self in Initialization", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name: &ast.ObjectIdentifier{Value: "Main", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+						},
+					},
+				},
+				{
+					Name: &ast.ObjectIdentifier{Value: "Test", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Attribute{
+							Name: &ast.ObjectIdentifier{Value: "copy_attr", Token: dummyToken},
+							Type: &ast.TypeIdentifier{Value: "Test", Token: dummyToken},
+							Init: &ast.MethodCall{
+								Object: &ast.ObjectIdentifier{Value: "self", Token: dummyToken},
+								Method: &ast.ObjectIdentifier{Value: "copy", Token: dummyToken},
+							},
+						},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertNoErrors(t, sa.Errors())
+		})
+	})
+
+	t.Run("Void Handling", func(t *testing.T) {
+		t.Run("Dispatch on Void", func(t *testing.T) {
+			methodCall := &ast.MethodCall{
+				Object: &ast.IsVoidExpression{
+					Expression: &ast.NewExpression{Type: &ast.TypeIdentifier{Value: "Object"}},
+				},
+				Method: &ast.ObjectIdentifier{Value: "abort"},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.analyzeExpression(methodCall, "Main")
+			assertErrorsContain(t, sa.Errors(), "dispatch on void")
+		})
+	})
+
+	t.Run("Default Values", func(t *testing.T) {
+		t.Run("Attribute Default Initialization", func(t *testing.T) {
+			cls := &ast.Class{
+				Name: &ast.ObjectIdentifier{Value: "Test"},
+				Features: []ast.Feature{
+					&ast.Attribute{
+						Name: &ast.ObjectIdentifier{Value: "count"},
+						Type: &ast.TypeIdentifier{Value: "Int"},
+						// No Init specified
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: []*ast.Class{cls}})
+
+			// Verify default value handling in symbol table
+			classSym := sa.symbolTable.Classes["Test"]
+			attrSym := classSym.Features["count"]
+			if attrSym.IsInitialized {
+				t.Error("Attribute should use default initialization")
+			}
+		})
+	})
+
+	t.Run("Self Constraints", func(t *testing.T) {
+		t.Run("Self as Attribute Name", func(t *testing.T) {
+			cls := &ast.Class{
+				Name: &ast.ObjectIdentifier{Value: "Bad"},
+				Features: []ast.Feature{
+					&ast.Attribute{
+						Name: &ast.ObjectIdentifier{Value: "self"}, // Invalid
+						Type: &ast.TypeIdentifier{Value: "Object"},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: []*ast.Class{cls}})
+			assertErrorsContain(t, sa.Errors(), "cannot be named 'self'")
+		})
+	})
+
+}
+
+func assertErrorsContain(t *testing.T, errors []string, substr string) {
+	t.Helper()
+	for _, err := range errors {
+		if strings.Contains(err, substr) {
+			return
+		}
+	}
+	t.Errorf("Expected error containing %q, got: %v", substr, errors)
+}
+
+func assertNoErrors(t *testing.T, errors []string) {
+	t.Helper()
+	if len(errors) > 0 {
+		t.Errorf("Expected no errors, got: %v", errors)
+	}
+}

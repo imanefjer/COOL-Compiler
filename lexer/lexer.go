@@ -339,6 +339,10 @@ func (l *Lexer) NextToken() Token {
 			tok.Literal = "="
 			l.readChar()
 		}
+	case l.char == '@':
+		tok.Type = AT
+		tok.Literal = "@"
+		l.readChar()
 	// Could be LT, LE, or ASSIGN
 	case l.char == '<':
 		if l.peekChar() == '-' {
