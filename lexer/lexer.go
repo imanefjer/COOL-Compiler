@@ -222,7 +222,7 @@ func (l *Lexer) readString() (string, error) {
 	return str, nil
 }
 
-// Add support for both single-line and multi-line comments
+//  support for both single-line and multi-line comments
 func (l *Lexer) skipComment() {
 	if l.char == '-' && l.peekChar() == '-' { // Single-line comment
 		l.readChar() // consume first -

@@ -365,7 +365,7 @@ func TestComments(t *testing.T) {
 }
 
 
-// Add test for string escape sequences
+//  test for string escape sequences
 func TestStringEscapeSequences(t *testing.T) {
 	tests := []lexerTest{
 		{
@@ -429,7 +429,7 @@ func TestStringEscapeSequences(t *testing.T) {
 	}
 }
 
-// Add test for nested comments
+//  test for nested comments
 func TestNestedComments(t *testing.T) {
 	tests := []lexerTest{
 		{
@@ -458,7 +458,7 @@ func TestNestedComments(t *testing.T) {
 	}
 }
 
-// Add test for case insensitive keywords
+//  test for case insensitive keywords
 func TestCaseInsensitiveKeywords(t *testing.T) {
 	tests := []lexerTest{
 		{

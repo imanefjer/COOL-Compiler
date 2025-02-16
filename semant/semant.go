@@ -53,7 +53,6 @@ func (sa *SemanticAnalyzer) topologicalSort(classes []*ast.Class) []*ast.Class {
 func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
 	fmt.Println("\n=== Building Class Hierarchy ===")
 
-	// First pass: Just register all class names
 	for _, class := range program.Classes {
 		className := class.Name.Value
 		if _, isBasic := sa.symbolTable.BasicClasses[className]; isBasic {
@@ -80,22 +79,18 @@ func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
 		}
 	}
 
-	// Validate inheritance hierarchy BEFORE analysis
 	if errs := sa.symbolTable.Inheritance.ValidateInheritance(); len(errs) > 0 {
 		sa.errors = append(sa.errors, errs...)
 		return
 	}
 
-	// Sort classes topologically AFTER inheritance setup
 	sortedClasses := sa.topologicalSort(program.Classes)
 
-	// Third pass: Analyze features in dependency order
 	for _, class := range sortedClasses {
 		fmt.Printf("\nAnalyzing features of class: %s\n", class.Name.Value)
 		sa.analyzeClass(class)
 	}
 
-	// Final validation
 	sa.validateMainClass(program)
 
 }
@@ -276,7 +271,7 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 
 		sa.analyzeExpression(e.Body, className)
 	case *ast.MethodCall:
-		// Check if we're dispatching on an IsVoid expression
+		// dispatching on an IsVoid expression
 		if _, isVoid := e.Object.(*ast.IsVoidExpression); isVoid {
 			sa.errors = append(sa.errors, "dispatch on void")
 			return
@@ -284,14 +279,14 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 
 		// Check if method exists in current class or parent classes
 		if e.Object == nil {
-			// This is a direct method call (like sum())
+			// This is a direct method call 
 			if _, exists := sa.symbolTable.LookupMethod(className, e.Method.Value); !exists {
 				sa.errors = append(sa.errors,
 					fmt.Sprintf("line %d:%d: undefined method '%s' called in class %s",
 						e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, className))
 			}
 		} else {
-			// This is an object method call (like sum_obj.sum())
+			// This is an object method call 
 			objectType := sa.symbolTable.GetExpressionType(e.Object, className)
 			if _, exists := sa.symbolTable.LookupMethod(objectType, e.Method.Value); !exists {
 				sa.errors = append(sa.errors,
@@ -305,24 +300,6 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 		}
 	}
 	// Add other expression types as needed
-}
-
-func (sa *SemanticAnalyzer) validateMethodBody(method *ast.Method, className string) error {
-	bodyType := sa.symbolTable.GetExpressionType(method.Body, className)
-	declaredType := method.ReturnType.Value
-
-	// Special handling for SELF_TYPE
-	if bodyType == "SELF_TYPE" {
-		if className == declaredType || declaredType == "SELF_TYPE" {
-			return nil // SELF_TYPE conforms to the class type or SELF_TYPE
-		}
-	}
-
-	if !sa.symbolTable.IsConformingType(bodyType, declaredType, className) {
-		return fmt.Errorf("line %d:%d: method %s body type %s does not conform to declared return type %s",
-			method.Token.Line, method.Token.Column, method.Name.Value, bodyType, declaredType)
-	}
-	return nil
 }
 
 func (sa *SemanticAnalyzer) validateMainClass(program *ast.Program) {

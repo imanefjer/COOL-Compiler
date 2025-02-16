@@ -1161,25 +1161,3 @@ func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
 	fmt.Println("Parser Error:", msg)
 	p.errors = append(p.errors, msg)
 }
-
-// First, add this function to parse function calls
-func (p *Parser) parseFunctionCall() ast.Expression {
-	fmt.Println("\n=== Starting parseFunctionCall ===")
-
-	// Create function call expression
-	fc := &ast.FunctionCall{
-		Token:    p.curToken,
-		Function: &ast.ObjectIdentifier{Token: p.curToken, Value: p.curToken.Literal},
-	}
-
-	// Expect opening parenthesis
-	if !p.expectAndPeek(lexer.LPAREN) {
-		return nil
-	}
-
-	// Parse arguments
-	fc.Arguments = p.parseExpressionList(lexer.RPAREN)
-
-	fmt.Printf("parseFunctionCall: Successfully parsed function call to %s\n", fc.Function.Value)
-	return fc
-}

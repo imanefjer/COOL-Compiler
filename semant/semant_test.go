@@ -224,7 +224,7 @@ func TestSemanticAnalysis(t *testing.T) {
 	t.Run("Control Flow Structures", func(t *testing.T) {
 		t.Run("If Expression Type Validation", func(t *testing.T) {
 			ifExpr := &ast.IfExpression{
-				Condition:   &ast.IntegerLiteral{Value: 5}, // Invalid non-bool condition
+				Condition:   &ast.IntegerLiteral{Value: 5}, 
 				Consequence: &ast.IntegerLiteral{Value: 10},
 				Alternative: &ast.IntegerLiteral{Value: 20},
 			}
@@ -305,7 +305,6 @@ func TestSemanticAnalysis(t *testing.T) {
 			sa := NewSemanticAnalyzer()
 			sa.Analyze(&ast.Program{Classes: []*ast.Class{cls}})
 
-			// Verify default value handling in symbol table
 			classSym := sa.symbolTable.Classes["Test"]
 			attrSym := classSym.Features["count"]
 			if attrSym.IsInitialized {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 )
 
-// Types of symbols that can be stored in symbol table
 type SymbolKind int
 
 const (
@@ -387,7 +386,7 @@ func (st *SymbolTable) LookupMethod(className, methodName string) (*Symbol, bool
 		}
 	}
 
-	// Finally check Object class for built-in methods
+	//  check Object class for built-in methods
 	if objectClass, exists := st.BasicClasses["Object"]; exists {
 		if method, exists := objectClass.Features[methodName]; exists && method.Kind == SymbolMethod {
 			return method, true
@@ -421,7 +420,6 @@ func (st *SymbolTable) GetClassFeatures(className string) map[string]*Symbol {
 	current := className
 	for current != "" {
 		if classSymbol, exists := st.Classes[current]; exists {
-			// Add features in reverse order to ensure parent features come first
 			for name := range classSymbol.Features {
 				if _, exists := features[name]; !exists {
 					features[name] = classSymbol.Features[name]
@@ -432,7 +430,6 @@ func (st *SymbolTable) GetClassFeatures(className string) map[string]*Symbol {
 		current = st.Inheritance.Edges[current]
 	}
 
-	// Now features map contains parent-first order
 	return features
 }
 
@@ -537,55 +534,6 @@ func (st *SymbolTable) AddAttribute(className string, attr *ast.Attribute) error
 	// Add attribute to class features
 	classSymbol.Features[attr.Name.Value] = attrSymbol
 	return nil
-}
-
-// Helper methods
-
-func (st *SymbolTable) validateOverride(parent, child *Symbol) error {
-	// Check return type
-	if parent.ReturnType != child.ReturnType {
-		// Special case: Both are SELF_TYPE
-		if !(parent.ReturnType == "SELF_TYPE" && child.ReturnType == "SELF_TYPE") {
-			return fmt.Errorf("return type mismatch: expected %s, got %s",
-				parent.ReturnType, child.ReturnType)
-		}
-	}
-
-	// Check parameter count and types
-	if len(parent.Parameters) != len(child.Parameters) {
-		return fmt.Errorf("wrong number of parameters: expected %d, got %d",
-			len(parent.Parameters), len(child.Parameters))
-	}
-
-	for i := 0; i < len(parent.Parameters); i++ {
-		if parent.Parameters[i].Type.Value != child.Parameters[i].Type.Value {
-			return fmt.Errorf("parameter %d type mismatch: expected %s, got %s",
-				i+1, parent.Parameters[i].Type.Value, child.Parameters[i].Type.Value)
-		}
-	}
-
-	return nil
-}
-
-func (st *SymbolTable) findMethodInParents(className, methodName string) (*Symbol, bool) {
-	current := st.Inheritance.Edges[className] // Start with parent
-	for current != "" && current != "Object" {
-		if classSymbol, exists := st.Classes[current]; exists {
-			if method, exists := classSymbol.Features[methodName]; exists && method.Kind == SymbolMethod {
-				return method, true
-			}
-		}
-		current = st.Inheritance.Edges[current]
-	}
-
-	// Check Object class
-	if objectClass, exists := st.BasicClasses["Object"]; exists {
-		if method, exists := objectClass.Features[methodName]; exists && method.Kind == SymbolMethod {
-			return method, true
-		}
-	}
-
-	return nil, false
 }
 
 func (st *SymbolTable) findAttributeInParents(className, attrName string) (*Symbol, bool) {
@@ -965,7 +913,7 @@ func (st *SymbolTable) GetMethodCallType(call *ast.MethodCall, currentClass stri
 	method, exists := st.LookupMethod(actualDispatchType, call.Method.Value)
 	if !exists {
 		fmt.Printf("DEBUG: Method %s not found in type %s\n", call.Method.Value, actualDispatchType)
-		return "Object" // Error case, should be handled elsewhere
+		return "Object" 
 	}
 
 	// If method returns SELF_TYPE, it's the type of the dispatch expression
@@ -982,7 +930,7 @@ func (st *SymbolTable) GetAssignmentType(assign *ast.Assignment, currentClass st
 	// The type of an assignment is the type of the variable being assigned to
 	symbol, exists := st.LookupSymbol(assign.Name.Value)
 	if !exists {
-		return "Object" // Error case, should be handled elsewhere
+		return "Object" 
 	}
 	return symbol.Type
 }
