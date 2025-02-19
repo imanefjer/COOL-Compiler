@@ -203,7 +203,7 @@ func NewInheritanceGraph() *InheritanceGraph {
 // AddInheritanceEdge adds a parent-child relationship to the inheritance graph
 func (g *InheritanceGraph) AddInheritanceEdge(child, parent string) error {
 	// Check for inheritance from basic types
-	if parent == "Int" || parent == "String" || parent == "Bool" || parent == "IO" {
+	if parent == "Int" || parent == "String" || parent == "Bool" {
 		return fmt.Errorf("class %s cannot inherit from %s", child, parent)
 	}
 

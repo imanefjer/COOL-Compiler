@@ -1,2 +1,12 @@
 cool-manual.pdf
 Final Project requirements.pdf
+
+.DS_Store
+.vscode
+main.go
+main1.go
+main2.go
+output.ll
+cool-compiler
+
+test_codegen

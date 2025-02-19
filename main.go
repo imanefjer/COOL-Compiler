@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func main() {
+func main3() {
 	inputFilePath := flag.String("i", "", "Path to the COOL source file")
 	flag.Parse()
 

@@ -1,24 +1,42 @@
--- Valid: Let shadowing
 
-class Parent {
-    method() : Object {
-        if true then 1 else 2 fi
-    };
+class A {
+  value: Int;
+
+  setValue(v: Int): Int {
+    {
+    value <- v;
+    v;
+    }
+    
+  };
+
+  getValue(): Int {
+    value
+  };
 };
 
-class Child inherits Parent {
-    method() : Object {
-        if true then 1 else 2 fi
-    };
+class B inherits A {
+  setValue(v: Int): Int {
+    {
+    value <- v + 5;
+    v + 5;
+    }
+  };
 };
 
-class Main {
-    main(): Int {
-        {
-(new Child)@Parent.method();
-        let x: Int <- 5 in
-            let x: Int <- 10 in x;
-        }
-        
-    };
+class Main inherits IO{
+  a: A;
+  b: B;
+  main(): Object {
+   {
+    a.setValue(10);
+    b.setValue(20);
+    if a.getValue() < b.getValue() then
+      a.getValue() + b.getValue()
+    else
+      a.getValue() - b.getValue()
+    fi;
+    out_string("Hello, world.\n");
+    }
+  };
 };
