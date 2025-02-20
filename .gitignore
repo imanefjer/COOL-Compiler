@@ -10,3 +10,8 @@ output.ll
 cool-compiler
 
 test_codegen
+example.ll
+example.s
+example.cool
+example1.cool
+

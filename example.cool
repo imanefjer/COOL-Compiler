@@ -1,42 +1,9 @@
-
-class A {
-  value: Int;
-
-  setValue(v: Int): Int {
-    {
-    value <- v;
-    v;
-    }
-    
-  };
-
-  getValue(): Int {
-    value
-  };
-};
-
-class B inherits A {
-  setValue(v: Int): Int {
-    {
-    value <- v + 5;
-    v + 5;
-    }
-  };
-};
-
-class Main inherits IO{
-  a: A;
-  b: B;
-  main(): Object {
-   {
-    a.setValue(10);
-    b.setValue(20);
-    if a.getValue() < b.getValue() then
-      a.getValue() + b.getValue()
-    else
-      a.getValue() - b.getValue()
-    fi;
-    out_string("Hello, world.\n");
-    }
-  };
+class Main {
+    a: Int;
+    main() : Object {
+      {
+        a <- 1;
+        if isvoid a then 0 else 1 fi;
+      }
+    };
 };
