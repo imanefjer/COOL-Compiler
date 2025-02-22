@@ -117,7 +117,7 @@ func (st *SymbolTable) initializeBasicClasses() {
 		IsBuiltin:  true,
 	}
 
-	// Initialize IO class
+	// Initialize IO class with its methods
 	ioClass := &Symbol{
 		Name:      "IO",
 		Kind:      SymbolClass,
@@ -126,13 +126,85 @@ func (st *SymbolTable) initializeBasicClasses() {
 		Features:  make(map[string]*Symbol),
 	}
 
-	// Initialize String class
+	// Add IO methods
+	ioClass.Features["out_string"] = &Symbol{
+		Name:       "out_string",
+		Kind:       SymbolMethod,
+		ReturnType: "SELF_TYPE",
+		IsBuiltin:  true,
+		Parameters: []*ast.Formal{{
+			Name: &ast.ObjectIdentifier{Value: "x"},
+			Type: &ast.TypeIdentifier{Value: "String"},
+		}},
+	}
+
+	ioClass.Features["out_int"] = &Symbol{
+		Name:       "out_int",
+		Kind:       SymbolMethod,
+		ReturnType: "SELF_TYPE",
+		IsBuiltin:  true,
+		Parameters: []*ast.Formal{{
+			Name: &ast.ObjectIdentifier{Value: "x"},
+			Type: &ast.TypeIdentifier{Value: "Int"},
+		}},
+	}
+
+	ioClass.Features["in_string"] = &Symbol{
+		Name:       "in_string",
+		Kind:       SymbolMethod,
+		ReturnType: "String",
+		IsBuiltin:  true,
+	}
+
+	ioClass.Features["in_int"] = &Symbol{
+		Name:       "in_int",
+		Kind:       SymbolMethod,
+		ReturnType: "Int",
+		IsBuiltin:  true,
+	}
+
+	// Initialize String class with its methods
 	stringClass := &Symbol{
 		Name:      "String",
 		Kind:      SymbolClass,
 		Parent:    "Object",
 		IsBuiltin: true,
 		Features:  make(map[string]*Symbol),
+	}
+
+	stringClass.Features["length"] = &Symbol{
+		Name:       "length",
+		Kind:       SymbolMethod,
+		ReturnType: "Int",
+		IsBuiltin:  true,
+	}
+
+	stringClass.Features["concat"] = &Symbol{
+		Name:       "concat",
+		Kind:       SymbolMethod,
+		ReturnType: "String",
+		IsBuiltin:  true,
+		Parameters: []*ast.Formal{{
+			Name: &ast.ObjectIdentifier{Value: "s"},
+			Type: &ast.TypeIdentifier{Value: "String"},
+		}},
+	}
+
+	stringClass.Features["substr"] = &Symbol{
+		Name:       "substr",
+		Kind:       SymbolMethod,
+		ReturnType: "String",
+		IsBuiltin:  true,
+		Parameters: []*ast.Formal{
+			{
+				Name: &ast.ObjectIdentifier{Value: "i"},
+				Type: &ast.TypeIdentifier{Value: "Int"},
+			},
+			{
+				Name: &ast.ObjectIdentifier{Value: "l"},
+				Type: &ast.TypeIdentifier{Value: "Int"},
+			},
+		},
 	}
 
 	// Initialize Int class
@@ -913,7 +985,7 @@ func (st *SymbolTable) GetMethodCallType(call *ast.MethodCall, currentClass stri
 	method, exists := st.LookupMethod(actualDispatchType, call.Method.Value)
 	if !exists {
 		fmt.Printf("DEBUG: Method %s not found in type %s\n", call.Method.Value, actualDispatchType)
-		return "Object" 
+		return "Object"
 	}
 
 	// If method returns SELF_TYPE, it's the type of the dispatch expression
@@ -930,7 +1002,7 @@ func (st *SymbolTable) GetAssignmentType(assign *ast.Assignment, currentClass st
 	// The type of an assignment is the type of the variable being assigned to
 	symbol, exists := st.LookupSymbol(assign.Name.Value)
 	if !exists {
-		return "Object" 
+		return "Object"
 	}
 	return symbol.Type
 }

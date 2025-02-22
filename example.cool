@@ -1,9 +1,29 @@
-class Main {
-    a: Int;
-    main() : Object {
-      {
-        a <- 1;
-        if isvoid a then 0 else 1 fi;
-      }
+
+
+class Main inherits IO {
+    a: Int <- 10;
+    name: String <- "Hello";
+    b: String <- "Hello";
+    main() : Object { 
+        {
+           -- b <- (new IO).in_string();
+            (new IO).out_string(b);
+            (new IO).out_int(a);
+            (new IO).out_string(name);
+            a <- a + 7;
+            name <- "Hello";
+            (new IO).out_int(a);
+            (new IO).out_string(name);
+             if a < 16 then  (new IO).out_string("Helldvsdsdfo") else (new IO).out_string("hello") fi;
+            (*while a < 20 loop
+            {
+                a <- a + 1;
+                (new IO).out_string("Helldvsdsdfo");
+                (new IO).out_int(a);
+
+            }
+            pool;*)
+
+        }
     };
 };

@@ -21,34 +21,36 @@ func (sa *SemanticAnalyzer) Errors() []string {
 	return sa.errors
 }
 func (sa *SemanticAnalyzer) topologicalSort(classes []*ast.Class) []*ast.Class {
-	visited := make(map[string]bool)
-	order := []*ast.Class{}
+    visited := make(map[string]bool)
+    order := []*ast.Class{}
 
-	var visit func(cls *ast.Class)
-	visit = func(cls *ast.Class) {
-		if visited[cls.Name.Value] {
-			return
-		}
-		visited[cls.Name.Value] = true
+    var visit func(cls *ast.Class)
+    visit = func(cls *ast.Class) {
+        if visited[cls.Name.Value] {
+            return
+        }
+        visited[cls.Name.Value] = true
 
-		// Process parent first if exists
-		if cls.Parent != nil {
-			parentName := cls.Parent.Value
-			for _, c := range classes {
-				if c.Name.Value == parentName {
-					visit(c)
-					break
-				}
-			}
-		}
+        // Process parent first if it's a user-defined class
+        if cls.Parent != nil {
+            parentName := cls.Parent.Value
+            for _, c := range classes {
+                if c.Name.Value == parentName {
+                    visit(c)
+                    break
+                }
+            }
+        }
 
-		order = append(order, cls)
-	}
+        order = append(order, cls)
+    }
 
-	for _, cls := range classes {
-		visit(cls)
-	}
-	return order
+    // Iterate over classes in original order
+    for _, class := range classes {
+        visit(class)
+    }
+
+    return order
 }
 func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
 	fmt.Println("\n=== Building Class Hierarchy ===")
@@ -242,15 +244,27 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 		// Create new scope for let bindings
 		sa.symbolTable.EnterScope(SymbolLocal, className)
 		defer sa.symbolTable.ExitScope()
-
-		for _, binding := range e.Bindings {
+	
+		// Process all bindings, including the first one
+		allBindings := make([]*ast.Binding, 0)
+		if e.Name != nil {
+			firstBinding := &ast.Binding{
+				Name: e.Name,
+				Type: e.Type,
+				Init: e.Init,
+			}
+			allBindings = append(allBindings, firstBinding)
+		}
+		allBindings = append(allBindings, e.Bindings...)
+	
+		for _, binding := range allBindings {
 			// Validate declared type
 			if !sa.symbolTable.isValidType(binding.Type.Value) {
 				sa.errors = append(sa.errors, fmt.Sprintf("line %d: undefined type %s in let binding",
 					binding.Name.Token.Line, binding.Type.Value))
 				continue
 			}
-
+	
 			// Analyze initializer if present
 			if binding.Init != nil {
 				sa.analyzeExpression(binding.Init, className)
@@ -260,7 +274,7 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 						binding.Name.Token.Line, initType, binding.Type.Value))
 				}
 			}
-
+	
 			// Add binding to scope
 			sa.symbolTable.CurrentScope.Symbols[binding.Name.Value] = &Symbol{
 				Name: binding.Name.Value,
@@ -268,7 +282,7 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 				Type: binding.Type.Value,
 			}
 		}
-
+	
 		sa.analyzeExpression(e.Body, className)
 	case *ast.MethodCall:
 		// dispatching on an IsVoid expression
