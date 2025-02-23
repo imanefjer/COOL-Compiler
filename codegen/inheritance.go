@@ -244,9 +244,9 @@ func (g *CodeGenerator) ConstructVTables() error {
 			parentVtable = constant.NewNull(i8Ptr)
 		} else if info.Parent != "" {
 			parentGlobal, ok := g.vtables[info.Parent]
-			if !ok {
-				return fmt.Errorf("parent vtable not found for class %s", className)
-			}
+			if !ok && info.Parent != "" && info.Parent != "Object" {
+    return fmt.Errorf("parent vtable %s not found for class %s", info.Parent, className)
+}
 			parentVtable = constant.NewBitCast(parentGlobal, i8Ptr)
 		} else {
 			parentVtable = constant.NewNull(i8Ptr)

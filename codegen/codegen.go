@@ -5,6 +5,7 @@ import (
 	"cool-compiler/lexer"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/constant"
@@ -343,6 +344,14 @@ func (g *CodeGenerator) generateProgramEntryPoint() error {
 }
 
 func (g *CodeGenerator) generateMethod(className string, method *ast.Method) error {
+	fmt.Printf("DEBUG: Generating method %s for class %s\n", method.Name.Value, className)
+	fmt.Printf("DEBUG: Method body type: %T\n", method.Body)
+
+	// Reset local variables for this method
+	g.locals = make(map[string]value.Value)
+	g.localsTypes = make(map[string]string)
+
+	// Rest of the method generation code remains unchanged...
 	methodName := fmt.Sprintf("%s_%s", className, method.Name.Value)
 	fn, ok := g.methods[methodName]
 	if !ok {
@@ -350,7 +359,220 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 	}
 
 	entryBlock := fn.NewBlock("entry")
+	fmt.Printf("DEBUG: Created entry block for method %s\n", methodName)
 
+	// Special case for String built-in methods
+	if className == "String" {
+		if method.Name.Value == "concat" {
+			self := fn.Params[0]
+			s := fn.Params[1]
+
+			// Cast self and s to String struct pointers
+			stringType := g.classTypes["String"]
+			selfPtr := entryBlock.NewBitCast(self, types.NewPointer(stringType))
+			sPtr := entryBlock.NewBitCast(s, types.NewPointer(stringType))
+
+			// Access 'value' fields
+			selfValuePtr := entryBlock.NewGetElementPtr(stringType, selfPtr, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+			selfValue := entryBlock.NewLoad(types.I8Ptr, selfValuePtr)
+
+			sValuePtr := entryBlock.NewGetElementPtr(stringType, sPtr, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+			sValue := entryBlock.NewLoad(types.I8Ptr, sValuePtr)
+
+			// Declare necessary functions
+			var strlen *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "strlen" {
+					strlen = f
+					break
+				}
+			}
+			if strlen == nil {
+				strlen = g.module.NewFunc("strlen", types.I64, ir.NewParam("str", types.I8Ptr))
+			}
+			var malloc *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "malloc" {
+					malloc = f
+					break
+				}
+			}
+			if malloc == nil {
+				malloc = g.module.NewFunc("malloc", types.I8Ptr, ir.NewParam("size", types.I64))
+			}
+			strcpy := g.module.NewFunc("strcpy", types.I8Ptr, ir.NewParam("dest", types.I8Ptr), ir.NewParam("src", types.I8Ptr))
+			strcat := g.module.NewFunc("strcat", types.I8Ptr, ir.NewParam("dest", types.I8Ptr), ir.NewParam("src", types.I8Ptr))
+
+			// Compute lengths and allocate buffer
+			lenSelf := entryBlock.NewCall(strlen, selfValue)
+			lenS := entryBlock.NewCall(strlen, sValue)
+			totalLen := entryBlock.NewAdd(lenSelf, lenS)
+			totalLenPlus1 := entryBlock.NewAdd(totalLen, constant.NewInt(types.I64, 1))
+
+			buffer := entryBlock.NewCall(malloc, totalLenPlus1)
+			entryBlock.NewCall(strcpy, buffer, selfValue)
+			entryBlock.NewCall(strcat, buffer, sValue)
+
+			// Allocate new String object
+			// nullPtr := constant.NewNull(types.NewPointer(stringType))
+			// gepIndex := constant.NewInt(types.I32, 1)
+			// gep := constant.NewGetElementPtr(stringType, nullPtr, gepIndex)
+			stringSize := constant.NewInt(types.I64, 16) // Size of vtable ptr (8) + string ptr (8)
+			stringObjMem := entryBlock.NewCall(malloc, stringSize)
+			stringObj := entryBlock.NewBitCast(stringObjMem, types.NewPointer(stringType))
+
+			// Set vtable
+			vtablePtr := entryBlock.NewGetElementPtr(stringType, stringObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+			entryBlock.NewStore(entryBlock.NewBitCast(g.vtables["String"], types.I8Ptr), vtablePtr)
+
+			// Set value field (i8*)
+			valuePtr := entryBlock.NewGetElementPtr(stringType, stringObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+			entryBlock.NewStore(buffer, valuePtr)
+
+			// Return the new String object
+			result := entryBlock.NewBitCast(stringObj, types.I8Ptr)
+			entryBlock.NewRet(result)
+			return nil
+		}
+		if method.Name.Value == "substr"{
+			self := fn.Params[0]
+			iParam := fn.Params[1]
+			lParam := fn.Params[2]
+		
+			stringType := g.classTypes["String"]
+			selfPtr := entryBlock.NewBitCast(self, types.NewPointer(stringType))
+			valuePtr := entryBlock.NewGetElementPtr(stringType, selfPtr, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+			originalStr := entryBlock.NewLoad(types.I8Ptr, valuePtr)
+		
+			// Declare strlen if not present
+			var strlenFunc *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "strlen" {
+					strlenFunc = f
+					break
+				}
+			}
+			if strlenFunc == nil {
+				strlenFunc = g.module.NewFunc("strlen", types.I64, ir.NewParam("str", types.I8Ptr))
+			}
+			lenOriginal := entryBlock.NewCall(strlenFunc, originalStr)
+		
+			// Convert i and l to i64
+			i64_i := entryBlock.NewSExt(iParam, types.I64)
+			i64_l := entryBlock.NewSExt(lParam, types.I64)
+		
+			// Check for invalid indices (i < 0, l < 0, i + l > length)
+			cmp_i_neg := entryBlock.NewICmp(enum.IPredSLT, i64_i, constant.NewInt(types.I64, 0))
+			cmp_l_neg := entryBlock.NewICmp(enum.IPredSLT, i64_l, constant.NewInt(types.I64, 0))
+			i_plus_l := entryBlock.NewAdd(i64_i, i64_l)
+			cmp_i_plus_l_gt_len := entryBlock.NewICmp(enum.IPredSGT, i_plus_l, lenOriginal)
+		
+			cond1 := entryBlock.NewOr(cmp_i_neg, cmp_l_neg)
+			cond := entryBlock.NewOr(cond1, cmp_i_plus_l_gt_len)
+		
+			// Create blocks for error handling
+			mainBlock := entryBlock.Parent.NewBlock("substr.main")
+			errorBlock := entryBlock.Parent.NewBlock("substr.error")
+			entryBlock.NewCondBr(cond, errorBlock, mainBlock)
+		
+			// Handle error by calling abort
+			var abortFunc *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "abort" {
+					abortFunc = f
+					break
+				}
+			}
+			if abortFunc == nil {
+				abortFunc = g.module.NewFunc("abort", types.Void)
+			}
+			errorBlock.NewCall(abortFunc)
+			errorBlock.NewUnreachable()
+		
+			// Main block: proceed with substring extraction
+			srcPtr := mainBlock.NewGetElementPtr(types.I8, originalStr, i64_i)
+		
+			// Allocate memory for new substring
+			var mallocFunc *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "malloc" {
+					mallocFunc = f
+					break
+				}
+			}
+			if mallocFunc == nil {
+				mallocFunc = g.module.NewFunc("malloc", types.I8Ptr, ir.NewParam("size", types.I64))
+			}
+			bufferSize := mainBlock.NewAdd(i64_l, constant.NewInt(types.I64, 1))
+			newBuf := mainBlock.NewCall(mallocFunc, bufferSize)
+		
+			// Declare memcpy to copy the substring
+			var memcpyFunc *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "memcpy" {
+					memcpyFunc = f
+					break
+				}
+			}
+			if memcpyFunc == nil {
+				memcpyFunc = g.module.NewFunc("memcpy", types.I8Ptr,
+					ir.NewParam("dest", types.I8Ptr),
+					ir.NewParam("src", types.I8Ptr),
+					ir.NewParam("len", types.I64))
+			}
+			mainBlock.NewCall(memcpyFunc, newBuf, srcPtr, i64_l)
+		
+			// Null-terminate the substring
+			nullTermPtr := mainBlock.NewGetElementPtr(types.I8, newBuf, i64_l)
+			mainBlock.NewStore(constant.NewInt(types.I8, 0), nullTermPtr)
+		
+			// Create new String object
+			stringSize := constant.NewInt(types.I64, 16) // Size of String struct
+			stringObjMem := mainBlock.NewCall(mallocFunc, stringSize)
+			stringObj := mainBlock.NewBitCast(stringObjMem, types.NewPointer(stringType))
+		
+			// Set vtable pointer
+			vtablePtr := mainBlock.NewGetElementPtr(stringType, stringObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+			mainBlock.NewStore(mainBlock.NewBitCast(g.vtables["String"], types.I8Ptr), vtablePtr)
+		
+			// Set value field
+			valueFieldPtr := mainBlock.NewGetElementPtr(stringType, stringObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+			mainBlock.NewStore(newBuf, valueFieldPtr)
+		
+			// Return the new String object
+			result := mainBlock.NewBitCast(stringObj, types.I8Ptr)
+			mainBlock.NewRet(result)
+		
+			return nil
+		}
+		// Handle length method
+		if method.Name.Value == "length" {
+			self := fn.Params[0]
+
+			// Cast self to String struct type: {i8*, i8*} (vtable and value)
+			stringType := g.classTypes["String"]
+			selfPtr := entryBlock.NewBitCast(self, types.NewPointer(stringType))
+
+			// Get the 'value' field (index 1)
+			valuePtr := entryBlock.NewGetElementPtr(stringType, selfPtr,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 1),
+			)
+			strPtr := entryBlock.NewLoad(types.NewPointer(types.I8), valuePtr)
+
+			// Call strlen on the string pointer
+			strlen := g.module.NewFunc("strlen", types.I64,
+				ir.NewParam("str", types.NewPointer(types.I8)))
+			lenCall := entryBlock.NewCall(strlen, strPtr)
+
+			// Truncate to Int (i32)
+			result := entryBlock.NewTrunc(lenCall, types.I32)
+			entryBlock.NewRet(result)
+			return nil
+		}
+	}
+
+	
 	// Special case for IO built-in methods
 	if className == "IO" {
 		// Handle out_string
@@ -370,6 +592,17 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 				printf.Sig.Variadic = true
 			}
 
+			stringType := g.classTypes["String"]
+			strPtr := entryBlock.NewBitCast(str, types.NewPointer(stringType))
+
+			// Access the 'value' field (index 1 in struct)
+			valuePtr := entryBlock.NewGetElementPtr(stringType, strPtr,
+				constant.NewInt(types.I32, 0), // Structure pointer
+				constant.NewInt(types.I32, 1), // Second field (value)
+			)
+			strValue := entryBlock.NewLoad(types.NewPointer(types.I8), valuePtr)
+
+			// Get format string
 			formatGlobal := g.getOrCreateStringConstant("%s\n")
 			var formatPtr value.Value
 			if arrType, ok := formatGlobal.Type().(*types.ArrayType); ok {
@@ -380,7 +613,7 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 				formatPtr = formatGlobal
 			}
 
-			entryBlock.NewCall(printf, formatPtr, str)
+			entryBlock.NewCall(printf, formatPtr, strValue)
 			entryBlock.NewRet(self)
 			return nil
 		}
@@ -429,6 +662,21 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 	g.locals["$self"] = typedSelf
 	g.localsTypes["$self"] = className // Store the static type of self.
 
+	// Ensure all class attributes are added to locals
+	if attrNames, exists := g.classAttrs[className]; exists {
+		for i, attrName := range attrNames {
+			attrPtr := entryBlock.NewGetElementPtr(
+				classType,
+				typedSelf,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, int64(i+1)), // +1 for vtable
+			)
+			g.locals[attrName] = attrPtr
+			fmt.Printf("DEBUG: Added attribute %s to locals for class %s\n", attrName, className)
+		}
+	} else {
+		return fmt.Errorf("no attributes found for class %s", className)
+	}
 	for i, attrName := range g.classAttrs[className] {
 		attrPtr := entryBlock.NewGetElementPtr(
 			classType,
@@ -458,21 +706,55 @@ var i8Ptr = types.NewPointer(types.I8)
 
 // generateExpression handles code generation for expressions
 func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression) (value.Value, *ir.Block, error) {
+	// Add debug logging at the start
+	fmt.Printf("DEBUG: Generating LLVM IR for expression type: %T\n", expr)
+	if expr == nil {
+		fmt.Printf("DEBUG: Expression is nil! Block: %v, Current class: %s\n", block, g.currentClass)
+		return nil, nil, fmt.Errorf("received nil expression")
+	}
+
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
+		fmt.Printf("DEBUG: Generating integer literal: %d\n", e.Value)
 		return constant.NewInt(types.I32, int64(e.Value)), block, nil
 
 	case *ast.BooleanLiteral:
+		fmt.Printf("DEBUG: Generating boolean literal: %v\n", e.Value)
 		if e.Value {
 			return constant.NewInt(types.I1, 1), block, nil
 		}
 		return constant.NewInt(types.I1, 0), block, nil
 	case *ast.StringLiteral:
-		// Create or retrieve a global constant for the string.
+		// Create global string constant
 		strGlobal := g.getOrCreateStringConstant(e.Value)
-		// Bitcast the global constant to i8*.
-		return block.NewBitCast(strGlobal, types.NewPointer(types.I8)), block, nil
 
+		// Allocate String object
+		stringType := g.classTypes["String"]
+		obj := block.NewAlloca(stringType)
+
+		// Initialize vtable pointer (first field)
+		vtablePtr := block.NewGetElementPtr(stringType, obj,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
+		block.NewStore(
+			block.NewBitCast(g.vtables["String"], types.NewPointer(types.I8)),
+			vtablePtr,
+		)
+
+		// Initialize 'value' field (second field)
+		valuePtr := block.NewGetElementPtr(stringType, obj,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 1),
+		)
+		// Get the field type of the 'value' field
+		fieldType := stringType.Fields[1]
+		// Cast string global to the correct type
+		strVal := block.NewBitCast(strGlobal, fieldType)
+		block.NewStore(strVal, valuePtr)
+
+		// Return the String object as i8*
+		return block.NewBitCast(obj, types.NewPointer(types.I8)), block, nil
 	case *ast.InfixExpression:
 		// Generate code for left and right expressions
 		left, leftBlock, err := g.generateExpression(block, e.Left)
@@ -616,9 +898,10 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			// Find attribute info.
 			classInfo := g.classTable[g.currentClass]
 			var attrInfo *AttributeInfo
-			for _, attr := range classInfo.Attributes {
+			for i := range classInfo.Attributes {
+				attr := &classInfo.Attributes[i] // Get pointer to the actual element
 				if attr.Name == e.Value {
-					attrInfo = &attr
+					attrInfo = attr
 					break
 				}
 			}
@@ -688,23 +971,46 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		return result, mergeBlock, nil
 
 	case *ast.MethodCall:
-		// Get the receiver object and its type
 		var receiverObj value.Value
 		var receiverType string
 		var err error
 
 		if e.Object == nil {
-			receiverObj = g.locals["self"]
+			// Implicit "self" receiver
+			receiverObj = g.locals["$self"]
 			receiverType = g.currentClass
 		} else {
+			// Generate code for the receiver expression
 			receiverObj, block, err = g.generateExpression(block, e.Object)
 			if err != nil {
 				return nil, block, err
 			}
-			if newExpr, ok := e.Object.(*ast.NewExpression); ok {
-				receiverType = newExpr.Type.Value
-			} else {
-				return nil, block, fmt.Errorf("unsupported receiver type")
+
+			// Determine receiver type based on expression
+			switch expr := e.Object.(type) {
+			case *ast.NewExpression:
+				receiverType = expr.Type.Value
+			case *ast.ObjectIdentifier:
+				// First check if it's a class attribute
+				if classInfo, exists := g.classTable[g.currentClass]; exists {
+					for _, attr := range classInfo.Attributes {
+						if attr.Name == expr.Value {
+							receiverType = attr.Type
+							break
+						}
+					}
+				}
+
+				// If not found as attribute, check local variables
+				if receiverType == "" {
+					var exists bool
+					receiverType, exists = g.localsTypes[expr.Value]
+					if !exists {
+						return nil, block, fmt.Errorf("undefined variable: %s", expr.Value)
+					}
+				}
+			default:
+				return nil, block, fmt.Errorf("unsupported receiver expression: %T", e.Object)
 			}
 		}
 
@@ -917,20 +1223,34 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		if err != nil {
 			return nil, valueBlock, err
 		}
-
+	
 		// Look up the variable location
 		varPtr := g.locals[e.Name.Value]
 		if varPtr == nil {
 			return nil, valueBlock, fmt.Errorf("undefined variable: %s", e.Name.Value)
 		}
-
+	
+		// Get destination type
+		destType := varPtr.Type().(*types.PointerType).ElemType
+	
+		// Cast value to destination type if necessary
+		if value.Type() != destType {
+			if types.IsPointer(value.Type()) && types.IsPointer(destType) {
+				value = valueBlock.NewBitCast(value, destType)
+			} else {
+				return nil, valueBlock, fmt.Errorf("type mismatch in assignment: %s -> %s", value.Type(), destType)
+			}
+		}
+	
 		// Store the new value
 		valueBlock.NewStore(value, varPtr)
-
-		// Assignment returns the assigned value
+	
+		// Return the assigned value
 		return value, valueBlock, nil
 
 	default:
+		fmt.Printf("DEBUG: Unhandled expression type: %T\n", expr)
+		fmt.Printf("DEBUG: Expression details: %+v\n", expr)
 		return nil, nil, fmt.Errorf("unsupported expression type: %T", expr)
 	}
 }
@@ -945,21 +1265,25 @@ func (g *CodeGenerator) getMethodIndex(methodName string) int64 {
 		return 0 // For now, return 0 for all methods
 	}
 }
-
 func (g *CodeGenerator) getOrCreateStringConstant(name string) *ir.Global {
-	// Create a unique name for the string constant
-	strConstName := fmt.Sprintf(".str.%s", name)
+	// Replace non-alphanumeric characters with underscores
+	sanitizedName := strings.Map(func(r rune) rune {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+			return '_'
+		}
+		return r
+	}, name)
+	strConstName := fmt.Sprintf(".str.%s", sanitizedName)
 
-	// Check if it already exists
+	// Check if it exists
 	for _, global := range g.module.Globals {
 		if global.Name() == strConstName {
 			return global
 		}
 	}
 
-	// Create new string constant if it doesn't exist
-	strConst := g.module.NewGlobalDef(strConstName,
-		constant.NewCharArray(append([]byte(name), 0))) // null-terminated
+	// Create new global
+	strConst := g.module.NewGlobalDef(strConstName, constant.NewCharArray(append([]byte(name), 0)))
 	return strConst
 }
 
@@ -974,7 +1298,6 @@ func (g *CodeGenerator) GetModule() *ir.Module {
 func (g *CodeGenerator) GetVTables() map[string]*ir.Global {
 	return g.vtables
 }
-
 func (g *CodeGenerator) BuildClassTypesFromTable() error {
 	for className, info := range g.classTable {
 		// Start with vtable pointer
@@ -983,17 +1306,22 @@ func (g *CodeGenerator) BuildClassTypesFromTable() error {
 		// Add all attributes (inherited and local)
 		for _, attr := range info.Attributes {
 			var fieldType types.Type
-			switch strings.ToLower(attr.Type) {
-			case "int":
-				fieldType = types.I32
-			case "bool":
-				fieldType = types.I1
-			default:
-				// For class types, use pointer to the class struct type
-				if classType, exists := g.classTypes[attr.Type]; exists {
-					fieldType = types.NewPointer(classType)
-				} else {
-					fieldType = types.NewPointer(types.I8)
+			// Handle String's 'value' as special case (i8*)
+			if className == "String" && attr.Name == "value" {
+				fieldType = types.NewPointer(types.I8)
+			} else {
+				switch strings.ToLower(attr.Type) {
+				case "int":
+					fieldType = types.I32
+				case "bool":
+					fieldType = types.I1
+				default:
+					// For class types, use pointer to the class struct type
+					if classType, exists := g.classTypes[attr.Type]; exists {
+						fieldType = types.NewPointer(classType)
+					} else {
+						fieldType = types.NewPointer(types.I8)
+					}
 				}
 			}
 			fields = append(fields, fieldType)
@@ -1082,38 +1410,61 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "SELF_TYPE"}, Value: "SELF_TYPE"},
 				Body:       nil,
 			},
-			
 		},
 	}
 
-	// Prepend IO to the program classes.
-	program.Classes = append([]*ast.Class{ioClass}, program.Classes...)
+	stringClass := &ast.Class{
+		Token:  lexer.Token{Literal: "class"},
+		Name:   &ast.ObjectIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+		Parent: &ast.TypeIdentifier{Token: lexer.Token{Literal: "inherits"}, Value: "Object"},
+		Features: []ast.Feature{
+			&ast.Attribute{
+				Name: &ast.ObjectIdentifier{Value: "value"},
+				Type: &ast.TypeIdentifier{Value: "String"},
+			},
+			// length method
+			&ast.Method{
+				Token:      lexer.Token{Literal: "method"},
+				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "length"}, Value: "length"},
+				Parameters: []*ast.Formal{},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "Int"}, Value: "Int"},
+				Body:       &ast.IntegerLiteral{Value: 0}, // Dummy body
 
-	// Initialize Object class.
-	g.classTable["Object"] = &ClassInfo{
-		Name:       "Object",
-		Parent:     "",
-		Attributes: []AttributeInfo{},
-		Methods:    make(map[string]MethodInfo),
-	}
-	g.classTypes["Object"] = types.NewStruct(types.NewPointer(types.I8))
+			},
+			// concat method
+			&ast.Method{
+				Token: lexer.Token{Literal: "method"},
+				Name:  &ast.ObjectIdentifier{Token: lexer.Token{Literal: "concat"}, Value: "concat"},
+				Parameters: []*ast.Formal{
+					{
+						Name: &ast.ObjectIdentifier{Token: lexer.Token{Literal: "s"}, Value: "s"},
+						Type: &ast.TypeIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+					},
+				},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+				Body:       &ast.StringLiteral{Value: ""}, // Dummy body
 
-	// Initialize IO class as a subclass of Object.
-	g.classTable["IO"] = &ClassInfo{
-		Name:       "IO",
-		Parent:     "Object",
-		Attributes: []AttributeInfo{},
-		Methods:    make(map[string]MethodInfo),
+			},
+			// substr method
+			&ast.Method{
+				Token: lexer.Token{Literal: "method"},
+				Name:  &ast.ObjectIdentifier{Token: lexer.Token{Literal: "substr"}, Value: "substr"},
+				Parameters: []*ast.Formal{
+					{
+						Name: &ast.ObjectIdentifier{Token: lexer.Token{Literal: "i"}, Value: "i"},
+						Type: &ast.TypeIdentifier{Token: lexer.Token{Literal: "Int"}, Value: "Int"},
+					},
+					{
+						Name: &ast.ObjectIdentifier{Token: lexer.Token{Literal: "l"}, Value: "l"},
+						Type: &ast.TypeIdentifier{Token: lexer.Token{Literal: "Int"}, Value: "Int"},
+					},
+				},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+				Body:       &ast.StringLiteral{Value: ""}, // Dummy body
+			},
+		},
 	}
-	g.classTypes["IO"] = types.NewStruct(types.NewPointer(types.I8))
 
-	// Register both built-in methods
-	g.classTable["IO"].Methods["out_string"] = MethodInfo{
-		Name:  "IO_out_string",
-		Index: 0,
-	}
-	g.classTable["IO"].Methods["out_int"] = MethodInfo{
-		Name:  "IO_out_int",
-		Index: 1, // Next available index
-	}
+	// Prepend built-in classes to the program
+	program.Classes = append([]*ast.Class{stringClass, ioClass}, program.Classes...)
 }
