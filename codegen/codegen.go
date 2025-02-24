@@ -360,7 +360,21 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 
 	entryBlock := fn.NewBlock("entry")
 	fmt.Printf("DEBUG: Created entry block for method %s\n", methodName)
-
+	if className == "Object" && method.Name.Value == "abort" {
+		var abortFunc *ir.Func
+		for _, f := range g.module.Funcs {
+			if f.Name() == "abort" {
+				abortFunc = f
+				break
+			}
+		}
+		if abortFunc == nil {
+			abortFunc = g.module.NewFunc("abort", types.Void)
+		}
+		entryBlock.NewCall(abortFunc)
+		entryBlock.NewUnreachable()
+		return nil
+	}
 	// Special case for String built-in methods
 	if className == "String" {
 		if method.Name.Value == "concat" {
@@ -434,16 +448,16 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 			entryBlock.NewRet(result)
 			return nil
 		}
-		if method.Name.Value == "substr"{
+		if method.Name.Value == "substr" {
 			self := fn.Params[0]
 			iParam := fn.Params[1]
 			lParam := fn.Params[2]
-		
+
 			stringType := g.classTypes["String"]
 			selfPtr := entryBlock.NewBitCast(self, types.NewPointer(stringType))
 			valuePtr := entryBlock.NewGetElementPtr(stringType, selfPtr, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
 			originalStr := entryBlock.NewLoad(types.I8Ptr, valuePtr)
-		
+
 			// Declare strlen if not present
 			var strlenFunc *ir.Func
 			for _, f := range g.module.Funcs {
@@ -456,25 +470,25 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 				strlenFunc = g.module.NewFunc("strlen", types.I64, ir.NewParam("str", types.I8Ptr))
 			}
 			lenOriginal := entryBlock.NewCall(strlenFunc, originalStr)
-		
+
 			// Convert i and l to i64
 			i64_i := entryBlock.NewSExt(iParam, types.I64)
 			i64_l := entryBlock.NewSExt(lParam, types.I64)
-		
+
 			// Check for invalid indices (i < 0, l < 0, i + l > length)
 			cmp_i_neg := entryBlock.NewICmp(enum.IPredSLT, i64_i, constant.NewInt(types.I64, 0))
 			cmp_l_neg := entryBlock.NewICmp(enum.IPredSLT, i64_l, constant.NewInt(types.I64, 0))
 			i_plus_l := entryBlock.NewAdd(i64_i, i64_l)
 			cmp_i_plus_l_gt_len := entryBlock.NewICmp(enum.IPredSGT, i_plus_l, lenOriginal)
-		
+
 			cond1 := entryBlock.NewOr(cmp_i_neg, cmp_l_neg)
 			cond := entryBlock.NewOr(cond1, cmp_i_plus_l_gt_len)
-		
+
 			// Create blocks for error handling
 			mainBlock := entryBlock.Parent.NewBlock("substr.main")
 			errorBlock := entryBlock.Parent.NewBlock("substr.error")
 			entryBlock.NewCondBr(cond, errorBlock, mainBlock)
-		
+
 			// Handle error by calling abort
 			var abortFunc *ir.Func
 			for _, f := range g.module.Funcs {
@@ -488,10 +502,10 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 			}
 			errorBlock.NewCall(abortFunc)
 			errorBlock.NewUnreachable()
-		
+
 			// Main block: proceed with substring extraction
 			srcPtr := mainBlock.NewGetElementPtr(types.I8, originalStr, i64_i)
-		
+
 			// Allocate memory for new substring
 			var mallocFunc *ir.Func
 			for _, f := range g.module.Funcs {
@@ -505,7 +519,7 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 			}
 			bufferSize := mainBlock.NewAdd(i64_l, constant.NewInt(types.I64, 1))
 			newBuf := mainBlock.NewCall(mallocFunc, bufferSize)
-		
+
 			// Declare memcpy to copy the substring
 			var memcpyFunc *ir.Func
 			for _, f := range g.module.Funcs {
@@ -521,28 +535,28 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 					ir.NewParam("len", types.I64))
 			}
 			mainBlock.NewCall(memcpyFunc, newBuf, srcPtr, i64_l)
-		
+
 			// Null-terminate the substring
 			nullTermPtr := mainBlock.NewGetElementPtr(types.I8, newBuf, i64_l)
 			mainBlock.NewStore(constant.NewInt(types.I8, 0), nullTermPtr)
-		
+
 			// Create new String object
 			stringSize := constant.NewInt(types.I64, 16) // Size of String struct
 			stringObjMem := mainBlock.NewCall(mallocFunc, stringSize)
 			stringObj := mainBlock.NewBitCast(stringObjMem, types.NewPointer(stringType))
-		
+
 			// Set vtable pointer
 			vtablePtr := mainBlock.NewGetElementPtr(stringType, stringObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
 			mainBlock.NewStore(mainBlock.NewBitCast(g.vtables["String"], types.I8Ptr), vtablePtr)
-		
+
 			// Set value field
 			valueFieldPtr := mainBlock.NewGetElementPtr(stringType, stringObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
 			mainBlock.NewStore(newBuf, valueFieldPtr)
-		
+
 			// Return the new String object
 			result := mainBlock.NewBitCast(stringObj, types.I8Ptr)
 			mainBlock.NewRet(result)
-		
+
 			return nil
 		}
 		// Handle length method
@@ -572,7 +586,6 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 		}
 	}
 
-	
 	// Special case for IO built-in methods
 	if className == "IO" {
 		// Handle out_string
@@ -688,18 +701,20 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 	}
 
 	value, currentBlock, err := g.generateExpression(entryBlock, method.Body)
-	if err != nil {
-		return err
-	}
+    if err != nil {
+        return err
+    }
 
-	currentBlock.NewRet(value)
-	if method.ReturnType.Value == "Object" {
-		// Return null pointer instead of integer
-		currentBlock.NewRet(constant.NewNull(types.NewPointer(types.I8)))
-	} else {
-		currentBlock.NewRet(value)
-	}
-	return nil
+    // Only add return instruction if block isn't terminated
+    if currentBlock.Term == nil {
+        if method.ReturnType.Value == "Object" {
+            currentBlock.NewRet(constant.NewNull(types.NewPointer(types.I8)))
+        } else {
+            currentBlock.NewRet(value)
+        }
+    }
+
+    return nil
 }
 
 var i8Ptr = types.NewPointer(types.I8)
@@ -1046,6 +1061,12 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		if result == nil {
 			return nil, block, fmt.Errorf("failed to generate call to %s", methodName)
 		}
+		if result.Type() == types.Void {
+			// For void returns, add unreachable if needed
+			if block.Term == nil {
+				block.NewUnreachable()
+			}
+		}
 		return result, block, nil
 
 	case *ast.FunctionCall:
@@ -1223,16 +1244,16 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		if err != nil {
 			return nil, valueBlock, err
 		}
-	
+
 		// Look up the variable location
 		varPtr := g.locals[e.Name.Value]
 		if varPtr == nil {
 			return nil, valueBlock, fmt.Errorf("undefined variable: %s", e.Name.Value)
 		}
-	
+
 		// Get destination type
 		destType := varPtr.Type().(*types.PointerType).ElemType
-	
+
 		// Cast value to destination type if necessary
 		if value.Type() != destType {
 			if types.IsPointer(value.Type()) && types.IsPointer(destType) {
@@ -1241,10 +1262,10 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 				return nil, valueBlock, fmt.Errorf("type mismatch in assignment: %s -> %s", value.Type(), destType)
 			}
 		}
-	
+
 		// Store the new value
 		valueBlock.NewStore(value, varPtr)
-	
+
 		// Return the assigned value
 		return value, valueBlock, nil
 
@@ -1378,6 +1399,20 @@ func (g *CodeGenerator) getMethodIndexFor(receiverClass, methodName string) int6
 	return 0
 }
 func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
+	objectClass := &ast.Class{
+		Token:  lexer.Token{Literal: "class"},
+		Name:   &ast.ObjectIdentifier{Token: lexer.Token{Literal: "Object"}, Value: "Object"},
+		Parent: &ast.TypeIdentifier{Value: ""}, // Explicit empty parent
+		Features: []ast.Feature{
+			&ast.Method{
+				Token:      lexer.Token{Literal: "method"},
+				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "abort"}, Value: "abort"},
+				Parameters: []*ast.Formal{},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "Object"}, Value: "Object"},
+				Body:       nil, // No body needed
+			},
+		},
+	}
 	// Create built-in IO class with its methods.
 	ioClass := &ast.Class{
 		Token:  lexer.Token{Literal: "class"},
@@ -1466,5 +1501,5 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 	}
 
 	// Prepend built-in classes to the program
-	program.Classes = append([]*ast.Class{stringClass, ioClass}, program.Classes...)
+	program.Classes = append([]*ast.Class{stringClass, ioClass, objectClass}, program.Classes...)
 }

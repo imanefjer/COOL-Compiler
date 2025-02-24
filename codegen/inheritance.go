@@ -128,31 +128,31 @@ func (g *CodeGenerator) BuildClassTable(classes []*ast.Class) error {
 	return nil
 }
 
-// sortClassesByInheritance returns a slice of *ast.Class sorted in order such that parents come before children.
 func sortClassesByInheritance(classes []*ast.Class, table ClassTable) []*ast.Class {
-	// For simplicity, sort by depth in the inheritance tree.
+	// Replace recursive depth calculation with iterative
 	depths := make(map[string]int)
-	var getDepth func(name string) int
-	getDepth = func(name string) int {
-		if d, ok := depths[name]; ok {
-			return d
+	for _, class := range classes {
+		current := class.Name.Value
+		depth := 0
+		for {
+			info, exists := table[current]
+			if !exists || info.Parent == "" {
+				break
+			}
+			current = info.Parent
+			depth++
 		}
-		info, ok := table[name]
-		if !ok || info.Parent == "" {
-			depths[name] = 0
-			return 0
-		}
-		d := 1 + getDepth(info.Parent)
-		depths[name] = d
-		return d
+		depths[class.Name.Value] = depth
 	}
+
 	sorted := make([]*ast.Class, len(classes))
 	copy(sorted, classes)
 	sort.Slice(sorted, func(i, j int) bool {
-		return getDepth(sorted[i].Name.Value) < getDepth(sorted[j].Name.Value)
+		return depths[sorted[i].Name.Value] < depths[sorted[j].Name.Value]
 	})
 	return sorted
 }
+
 func (g *CodeGenerator) ComputeObjectLayouts() error {
 	// Iterate over each class in the class table.
 	for _, classInfo := range g.classTable {
@@ -176,25 +176,28 @@ func (g *CodeGenerator) ConstructVTables() error {
     
             // Collect all methods including inherited ones
             var allMethods []MethodInfo
-		currentClass := className
-		for currentClass != "" {
-			if ci, exists := g.classTable[currentClass]; exists {
-				// Collect methods in reverse order to ensure parent methods come first
-				ms := make([]MethodInfo, 0, len(ci.Methods))
-				for _, m := range ci.Methods {
-					ms = append(ms, m)
-				}
-				// Sort methods by index to maintain order
-				sort.Slice(ms, func(i, j int) bool {
-					return ms[i].Index < ms[j].Index
-				})
-				// Prepend to maintain inheritance order
-				allMethods = append(ms, allMethods...)
-				currentClass = ci.Parent
-			} else {
-				break
-			}
-		}
+            currentClass := className
+            for currentClass != "" {
+                if ci, exists := g.classTable[currentClass]; exists {
+                    // Collect methods in declaration order
+                    ms := make([]MethodInfo, 0, len(ci.Methods))
+                    // Create sorted list of method names
+                    var names []string
+                    for name := range ci.Methods {
+                        names = append(names, name)
+                    }
+                    sort.Strings(names)
+                    // Add methods in sorted order
+                    for _, name := range names {
+                        ms = append(ms, ci.Methods[name])
+                    }
+                    // Prepend to maintain inheritance order
+                    allMethods = append(ms, allMethods...)
+                    currentClass = ci.Parent
+                } else {
+                    break
+                }
+            }
         methodMap := make(map[string]MethodInfo)
 		for _, m := range allMethods {
 			methodMap[m.Name] = m
@@ -293,33 +296,38 @@ func (g *CodeGenerator) ConstructVTables() error {
 }
 
 
-
 // Helper: returns a slice of class names sorted so that parent's come before children.
 func sortClassesByInheritanceFromTable(table map[string]*ClassInfo) []string {
-	// Compute depths.
-	depths := make(map[string]int)
-	var getDepth func(name string) int
-	getDepth = func(name string) int {
-		if d, ok := depths[name]; ok {
-			return d
-		}
-		info, ok := table[name]
-		if !ok || info.Parent == "" {
-			depths[name] = 0
-			return 0
-		}
-		d := 1 + getDepth(info.Parent)
-		depths[name] = d
-		return d
-	}
-	// Collect keys.
+	// Compute depths iteratively
+    depths := make(map[string]int)
+    for name := range table {
+        current := name
+        depth := 0
+        visited := make(map[string]bool) // Track visited classes
+        for {
+            if visited[current] {
+                // Handle cyclic dependency error
+                panic(fmt.Sprintf("inheritance cycle detected at class %s", current))
+            }
+            visited[current] = true
+            
+            info, exists := table[current]
+            if !exists || info.Parent == "" {
+                break
+            }
+            current = info.Parent
+            depth++
+        }
+        depths[name] = depth
+    }    
+	
+	// Collect keys and sort
 	names := make([]string, 0, len(table))
 	for name := range table {
 		names = append(names, name)
 	}
-	// Sort by depth (lower depth first).
 	sort.Slice(names, func(i, j int) bool {
-		return getDepth(names[i]) < getDepth(names[j])
+		return depths[names[i]] < depths[names[j]]
 	})
 	return names
 }
