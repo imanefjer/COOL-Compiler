@@ -1,8 +1,9 @@
-
 class Main inherits IO {
     a: Int <- 10;
     b: String <- "Hello, World!";
-    c: String ;
+    c: String <- "Hello";
+    e: Int;
+    d: Bool <- false;
     main() : Object { 
         {
             (new IO).out_string(b);
@@ -11,9 +12,15 @@ class Main inherits IO {
             (new IO).out_string(b.substr(0, 5));
             b <- b.concat("Hello");
             (new IO).out_string(b);
-            --c <- b.type_name();
-            --(new IO).out_string(c);
-            
+            c <- (new String).type_name();
+            (new IO).out_string(c);
+            c <- b.type_name();
+           --abort();
+            (new IO).out_string(c);
+            (new IO).out_string(d.type_name());
+            (new IO).out_string(e.type_name());
+            (new IO).out_string(a.type_name());
+
         }
     };
 };

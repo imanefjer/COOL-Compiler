@@ -4,7 +4,6 @@ import (
 	"cool-compiler/ast"
 	"fmt"
 
-	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/constant"
 	"github.com/llir/llvm/ir/types"
 
@@ -41,12 +40,22 @@ type MethodInfo struct {
 func (g *CodeGenerator) BuildClassTable(classes []*ast.Class) error {
 	g.classTable = make(ClassTable)
 
-	// Create Object root class
+	// Create Object root class with type_name method
 	g.classTable["Object"] = &ClassInfo{
 		Name:       "Object",
 		Parent:     "",
 		Attributes: []AttributeInfo{},
 		Methods:    make(map[string]MethodInfo),
+	}
+
+	// Add built-in methods to Object
+	g.classTable["Object"].Methods["abort"] = MethodInfo{
+		Name:  "Object_abort",
+		Index: 0,
+	}
+	g.classTable["Object"].Methods["type_name"] = MethodInfo{
+		Name:  "Object_type_name",
+		Index: 1,
 	}
 
 	// First pass: create initial entries
@@ -124,6 +133,14 @@ func (g *CodeGenerator) BuildClassTable(classes []*ast.Class) error {
 				}
 			}
 		}
+
+		// Ensure type_name is properly inherited if not overridden
+		if _, hasTypeName := info.Methods["type_name"]; !hasTypeName {
+			info.Methods["type_name"] = MethodInfo{
+				Name:  "Object_type_name",
+				Index: 1, // Same index as in Object
+			}
+		}
 	}
 	return nil
 }
@@ -170,157 +187,161 @@ func (g *CodeGenerator) ComputeObjectLayouts() error {
 
 func (g *CodeGenerator) ConstructVTables() error {
 	fmt.Println("\n=== Debug: Constructing VTables ===")
-        sortedClasses := sortClassesByInheritanceFromTable(g.classTable)
-        for _, className := range sortedClasses {
-            info := g.classTable[className]
-    
-            // Collect all methods including inherited ones
-            var allMethods []MethodInfo
-            currentClass := className
-            for currentClass != "" {
-                if ci, exists := g.classTable[currentClass]; exists {
-                    // Collect methods in declaration order
-                    ms := make([]MethodInfo, 0, len(ci.Methods))
-                    // Create sorted list of method names
-                    var names []string
-                    for name := range ci.Methods {
-                        names = append(names, name)
-                    }
-                    sort.Strings(names)
-                    // Add methods in sorted order
-                    for _, name := range names {
-                        ms = append(ms, ci.Methods[name])
-                    }
-                    // Prepend to maintain inheritance order
-                    allMethods = append(ms, allMethods...)
-                    currentClass = ci.Parent
-                } else {
-                    break
-                }
-            }
-        methodMap := make(map[string]MethodInfo)
-		for _, m := range allMethods {
-			methodMap[m.Name] = m
+	sortedClasses := sortClassesByInheritanceFromTable(g.classTable)
+
+	fmt.Println("\nSorted classes in inheritance order:", sortedClasses)
+
+	for _, className := range sortedClasses {
+		info := g.classTable[className]
+		fmt.Printf("\nProcessing vtable for class: %s\n", className)
+		fmt.Printf("Parent class: %s\n", info.Parent)
+
+		// Collect all methods including inherited ones in correct order
+		methodMap := make(map[string]MethodInfo)
+
+		// First, get all methods from the inheritance chain (bottom-up)
+		currentClass := className
+		fmt.Printf("\nTraversing inheritance chain for %s:\n", className)
+		for currentClass != "" {
+			if classInfo, exists := g.classTable[currentClass]; exists {
+				fmt.Printf("- Checking methods in class: %s\n", currentClass)
+				// Add methods from current class, potentially overriding parent methods
+				for methodName, methodInfo := range classInfo.Methods {
+					if _, exists := methodMap[methodName]; !exists {
+						// Keep the original method implementation but update the name
+						newMethodInfo := MethodInfo{
+							Name:  fmt.Sprintf("%s_%s", className, methodName),
+							Index: methodInfo.Index,
+						}
+						fmt.Printf("  * Adding method: %s (Index: %d)\n", newMethodInfo.Name, newMethodInfo.Index)
+						methodMap[methodName] = newMethodInfo
+
+						// Copy the implementation from the parent class if it doesn't exist
+						if g.methods[newMethodInfo.Name] == nil && g.methods[methodInfo.Name] != nil {
+							g.methods[newMethodInfo.Name] = g.methods[methodInfo.Name]
+						}
+					} else {
+						fmt.Printf("  * Method already exists: %s (skipping)\n", methodName)
+					}
+				}
+				currentClass = classInfo.Parent
+			} else {
+				fmt.Printf("WARNING: Class %s not found in class table\n", currentClass)
+				break
+			}
 		}
-		// Convert the method map to a slice and sort by the stored index.
-		allMethods = make([]MethodInfo, 0, len(methodMap))
-		for _, m := range methodMap {
-			allMethods = append(allMethods, m)
+
+		// Ensure type_name is available
+		if _, hasTypeName := methodMap["type_name"]; !hasTypeName {
+			fmt.Printf("Adding type_name method from Object class\n")
+			methodMap["type_name"] = MethodInfo{
+				Name:  "Object_type_name",
+				Index: 1, // Standard index for type_name in Object class
+			}
 		}
-		sort.Slice(allMethods, func(i, j int) bool {
-			return allMethods[i].Index < allMethods[j].Index
+
+		// Convert map to sorted slice to ensure consistent ordering
+		var methods []MethodInfo
+		fmt.Printf("\nFinal method list for %s:\n", className)
+		for _, method := range methodMap {
+			methods = append(methods, method)
+			fmt.Printf("- Method: %s (Index: %d)\n", method.Name, method.Index)
+		}
+		sort.Slice(methods, func(i, j int) bool {
+			return methods[i].Index < methods[j].Index
 		})
 
-		// If no methods were found in the chain, fall back to the parent's vtable method count.
-		n := uint64(len(allMethods))
-		if n == 0 && info.Parent != "" {
-			parentVtableGlobal := g.vtables[info.Parent]
-			if parentVtableGlobal != nil {
-				parentVtableType := parentVtableGlobal.Type().(*types.PointerType).ElemType.(*types.StructType)
-				parentMethodArrayType := parentVtableType.Fields[2].(*types.ArrayType)
-				n = parentMethodArrayType.Len
-				// Also, inherit parent's methods.
-				allMethods = []MethodInfo{}
-				for _, m := range g.classTable[info.Parent].Methods {
-					allMethods = append(allMethods, m)
-				}
-				sort.Slice(allMethods, func(i, j int) bool {
-					return allMethods[i].Index < allMethods[j].Index
-				})
-			}
-		}
-
-		fmt.Printf("For class %s, computed method count = %d\n", className, n)
-		// If still zero, force a dummy method.
+		// Create vtable type with correct size
+		n := uint64(len(methods))
 		if n == 0 {
-			dummyFn := g.module.NewFunc(className+"_dummy", types.I32, ir.NewParam("self", i8Ptr))
-			dummyBlock := dummyFn.NewBlock("entry")
-			dummyBlock.NewRet(constant.NewInt(types.I32, 0))
-			g.methods[dummyFn.Name()] = dummyFn
-			allMethods = []MethodInfo{{Name: dummyFn.Name(), Index: 0}}
-			n = 1
+			n = 1 // Ensure at least one slot
 		}
 
-		// Determine parent's vtable pointer.
+		// Get class name and parent name constants
+		classNameConst := g.getOrCreateStringConstant(info.Name)
 		var parentVtable constant.Constant
-		if className == "Object" {
-			parentVtable = constant.NewNull(i8Ptr)
-		} else if info.Parent != "" {
-			parentGlobal, ok := g.vtables[info.Parent]
-			if !ok && info.Parent != "" && info.Parent != "Object" {
-    return fmt.Errorf("parent vtable %s not found for class %s", info.Parent, className)
-}
-			parentVtable = constant.NewBitCast(parentGlobal, i8Ptr)
+		if info.Parent == "" {
+			parentVtable = constant.NewNull(types.NewPointer(types.I8))
+			fmt.Printf("Setting null parent vtable for root class: %s\n", info.Name)
 		} else {
-			parentVtable = constant.NewNull(i8Ptr)
-		}
-
-		classNameConst := g.getOrCreateStringConstant(className)
-		vtableArrayType := types.NewArray(n, i8Ptr)
-		vtableType := types.NewStruct(i8Ptr, i8Ptr, vtableArrayType)
-
-		var methodTypes []types.Type
-		for _, m := range allMethods {
-			fn := g.methods[m.Name]
-			if fn != nil {
-				methodTypes = append(methodTypes, fn.Type())
-			} else {
-				// Fallback to dummy function type if method not found
-				methodTypes = append(methodTypes, types.NewPointer(types.NewFunc(types.I32, i8Ptr)))
+			parentGlobal := g.vtables[info.Parent]
+			if parentGlobal == nil {
+				return fmt.Errorf("parent vtable %s not found for class %s", info.Parent, info.Name)
 			}
+			parentVtable = constant.NewBitCast(parentGlobal, types.NewPointer(types.I8))
+			fmt.Printf("Setting parent vtable pointer from %s to %s\n", info.Parent, info.Name)
 		}
 
-
-		// Prepare method constants with correct casting
-		var methodConstants []constant.Constant
-		for _, m := range allMethods {
-			fn := g.methods[m.Name]
-			if fn == nil {
-				return fmt.Errorf("method %s not found in methods map", m.Name)
-			}
-			// Cast to i8* for vtable entry
-			methodConstants = append(methodConstants, constant.NewBitCast(fn, types.NewPointer(types.I8)))
-		}
-
-		vtableInit := constant.NewStruct(vtableType,
-			constant.NewBitCast(classNameConst, i8Ptr),
-			parentVtable,
-			constant.NewArray(vtableArrayType, methodConstants...),
+		// Create vtable type
+		vtableArrayType := types.NewArray(n, types.NewPointer(types.I8))
+		vtableType := types.NewStruct(
+			types.NewPointer(types.I8), // class name
+			types.NewPointer(types.I8), // parent vtable
+			vtableArrayType,            // methods array
 		)
-		vtable := g.module.NewGlobalDef(fmt.Sprintf("%s_vtable", className), vtableInit)
-		g.vtables[className] = vtable
 
-		fmt.Printf("Constructed vtable for %s with %d method(s) and parent pointer %v\n", className, n, parentVtable)
+		// Create method list
+		methodList := make([]constant.Constant, 0, n)
+		fmt.Printf("\nAdding methods to vtable for %s:\n", className)
+		for _, method := range methods {
+			fn := g.methods[method.Name]
+			if fn == nil {
+				fmt.Printf("ERROR: Method %s not found in methods map\n", method.Name)
+				return fmt.Errorf("method %s not found in methods map", method.Name)
+			}
+			fmt.Printf("- Adding method to vtable: %s\n", method.Name)
+			methodList = append(methodList, constant.NewBitCast(fn, types.NewPointer(types.I8)))
+		}
+
+		// Create vtable initializer
+		vtableInit := constant.NewStruct(vtableType,
+			constant.NewBitCast(classNameConst, types.NewPointer(types.I8)),
+			parentVtable,
+			constant.NewArray(vtableArrayType, methodList...),
+		)
+
+		// Create vtable global
+		vtable := g.module.NewGlobalDef(fmt.Sprintf("%s_vtable", info.Name), vtableInit)
+		g.vtables[info.Name] = vtable
+
+		fmt.Printf("\nCompleted vtable construction for %s with %d method(s)\n",
+			info.Name, n)
 	}
+
+	// Print final vtable summary
+	fmt.Println("\n=== Final VTable Summary ===")
+	for className, vtable := range g.vtables {
+		fmt.Printf("Class %s vtable at: %s\n", className, vtable.Name())
+	}
+
 	return nil
 }
-
 
 // Helper: returns a slice of class names sorted so that parent's come before children.
 func sortClassesByInheritanceFromTable(table map[string]*ClassInfo) []string {
 	// Compute depths iteratively
-    depths := make(map[string]int)
-    for name := range table {
-        current := name
-        depth := 0
-        visited := make(map[string]bool) // Track visited classes
-        for {
-            if visited[current] {
-                // Handle cyclic dependency error
-                panic(fmt.Sprintf("inheritance cycle detected at class %s", current))
-            }
-            visited[current] = true
-            
-            info, exists := table[current]
-            if !exists || info.Parent == "" {
-                break
-            }
-            current = info.Parent
-            depth++
-        }
-        depths[name] = depth
-    }    
-	
+	depths := make(map[string]int)
+	for name := range table {
+		current := name
+		depth := 0
+		visited := make(map[string]bool) // Track visited classes
+		for {
+			if visited[current] {
+				// Handle cyclic dependency error
+				panic(fmt.Sprintf("inheritance cycle detected at class %s", current))
+			}
+			visited[current] = true
+
+			info, exists := table[current]
+			if !exists || info.Parent == "" {
+				break
+			}
+			current = info.Parent
+			depth++
+		}
+		depths[name] = depth
+	}
+
 	// Collect keys and sort
 	names := make([]string, 0, len(table))
 	for name := range table {

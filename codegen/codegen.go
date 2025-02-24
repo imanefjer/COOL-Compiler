@@ -1077,7 +1077,77 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			}
 		}
 
-		// Find the method in the class hierarchy
+		// Special handling for type_name method on primitive types
+		if e.Method.Value == "type_name" {
+			// For primitive types (Bool, Int), use Object's type_name implementation
+			methodName := "Object_type_name"
+			methodFunc := g.methods[methodName]
+
+			if methodFunc == nil {
+				return nil, block, fmt.Errorf("method %s not found", methodName)
+			}
+
+			// Get the type name string
+			typeNameStr := g.getOrCreateStringConstant(receiverType)
+
+			// Create new String object
+			stringType := g.classTypes["String"]
+			stringObj := block.NewAlloca(stringType)
+
+			// Set vtable for String object
+			stringVtablePtr := block.NewGetElementPtr(stringType, stringObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+			block.NewStore(
+				block.NewBitCast(g.vtables["String"], types.NewPointer(types.I8)),
+				stringVtablePtr,
+			)
+
+			// Set string value (type name)
+			valuePtr := block.NewGetElementPtr(stringType, stringObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 1),
+			)
+
+			var strPtr value.Value
+			if arrType, ok := typeNameStr.Type().(*types.ArrayType); ok {
+				strPtr = block.NewGetElementPtr(arrType, typeNameStr,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+			} else {
+				strPtr = block.NewBitCast(typeNameStr, types.NewPointer(types.I8))
+			}
+			block.NewStore(strPtr, valuePtr)
+
+			// If this is being used as an argument to out_int, return the length of the type name
+			if parent, ok := expr.(*ast.MethodCall); ok && parent.Method.Value == "out_int" {
+				// Get strlen function
+				var strlen *ir.Func
+				for _, f := range g.module.Funcs {
+					if f.Name() == "strlen" {
+						strlen = f
+						break
+					}
+				}
+				if strlen == nil {
+					strlen = g.module.NewFunc("strlen", types.I64,
+						ir.NewParam("str", types.NewPointer(types.I8)))
+				}
+				
+				// Get length of the type name string
+				length := block.NewCall(strlen, strPtr)
+				// Convert length to i32
+				return block.NewTrunc(length, types.I32), block, nil
+			}
+
+			// Otherwise return the String object
+			result := block.NewBitCast(stringObj, types.NewPointer(types.I8))
+			return result, block, nil
+		}
+
+		// Rest of the method call handling remains the same...
 		methodName := fmt.Sprintf("%s_%s", receiverType, e.Method.Value)
 		methodFunc := g.methods[methodName]
 
