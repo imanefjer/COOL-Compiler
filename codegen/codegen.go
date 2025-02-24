@@ -124,8 +124,12 @@ func (g *CodeGenerator) DeclareClasses(classes []*ast.Class) error {
 			case "bool":
 				fieldType = types.I1
 			default:
-				// For "String" and user-defined types, use a pointer type.
-				fieldType = types.NewPointer(types.I8)
+				// For user-defined types, use pointer to their struct type
+				if classType, exists := g.classTypes[attr.Type.Value]; exists {
+					fieldType = types.NewPointer(classType)
+				} else {
+					fieldType = types.NewPointer(types.I8) // Fallback
+				}
 			}
 			fields = append(fields, fieldType)
 		}
@@ -302,35 +306,16 @@ func (g *CodeGenerator) generateProgramEntryPoint() error {
 			constant.NewInt(types.I32, int64(attrInfo.Offset)),
 		)
 
-		if attrAST != nil && attrAST.Init != nil {
-			// Generate code for custom initializer
-			initVal, initBlock, err := g.generateExpression(block, attrAST.Init)
-			if err != nil {
-				return fmt.Errorf("error initializing %s: %v", attrInfo.Name, err)
-			}
-			block = initBlock
+		// Initialize the attribute
+		var err error
+		var initExpr ast.Expression
+		if attrAST != nil {
+			initExpr = attrAST.Init
+		}
 
-			// Cast if necessary
-			if !initVal.Type().Equal(attrPtr.Type().(*types.PointerType).ElemType) {
-				initVal = block.NewBitCast(initVal, attrPtr.Type().(*types.PointerType).ElemType)
-			}
-
-			block.NewStore(initVal, attrPtr)
-		} else {
-			// Fallback to default initialization
-			var defaultVal value.Value
-			switch strings.ToLower(attrInfo.Type) {
-			case "int":
-				defaultVal = constant.NewInt(types.I32, 0)
-			case "bool":
-				defaultVal = constant.NewInt(types.I1, 0)
-			case "string":
-				emptyStr := g.getOrCreateStringConstant("")
-				defaultVal = block.NewBitCast(emptyStr, types.NewPointer(types.I8))
-			default:
-				defaultVal = constant.NewNull(types.NewPointer(types.I8))
-			}
-			block.NewStore(defaultVal, attrPtr)
+		block, err = g.initializeAttribute(block, attrPtr, attrInfo.Type, initExpr)
+		if err != nil {
+			return fmt.Errorf("error initializing attribute %s: %v", attrInfo.Name, err)
 		}
 	}
 
@@ -360,6 +345,62 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 
 	entryBlock := fn.NewBlock("entry")
 	fmt.Printf("DEBUG: Created entry block for method %s\n", methodName)
+	if method.Name.Value == "type_name" {
+		// Get self parameter
+		self := fn.Params[0]
+
+		// Get the vtable pointer
+		classType := g.classTypes[className]
+		selfPtr := entryBlock.NewBitCast(self, types.NewPointer(classType))
+		vtablePtrPtr := entryBlock.NewGetElementPtr(classType, selfPtr,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
+		vtablePtr := entryBlock.NewLoad(types.NewPointer(types.I8), vtablePtrPtr)
+
+		// Cast vtable pointer to correct type
+		vtableStructType := types.NewStruct(
+			types.NewPointer(types.I8),                    // class name
+			types.NewPointer(types.I8),                    // parent class name
+			types.NewArray(0, types.NewPointer(types.I8)), // methods
+		)
+		castedVtable := entryBlock.NewBitCast(vtablePtr, types.NewPointer(vtableStructType))
+
+		// Get class name pointer (first field of vtable)
+		classNamePtrPtr := entryBlock.NewGetElementPtr(vtableStructType, castedVtable,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
+		classNamePtr := entryBlock.NewLoad(types.NewPointer(types.I8), classNamePtrPtr)
+
+		// Create new String object
+		stringType := g.classTypes["String"]
+		stringObj := entryBlock.NewAlloca(stringType)
+
+		// Set vtable for String object
+		stringVtablePtr := entryBlock.NewGetElementPtr(stringType, stringObj,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
+		entryBlock.NewStore(
+			entryBlock.NewBitCast(g.vtables["String"], types.NewPointer(types.I8)),
+			stringVtablePtr,
+		)
+
+		// Set string value (class name)
+		valuePtr := entryBlock.NewGetElementPtr(stringType, stringObj,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 1),
+		)
+		entryBlock.NewStore(classNamePtr, valuePtr)
+
+		// Return String object
+		result := entryBlock.NewBitCast(stringObj, types.NewPointer(types.I8))
+		entryBlock.NewRet(result)
+		return nil
+	}
+
+	// Handle abort method
 	if className == "Object" && method.Name.Value == "abort" {
 		var abortFunc *ir.Func
 		for _, f := range g.module.Funcs {
@@ -701,20 +742,20 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 	}
 
 	value, currentBlock, err := g.generateExpression(entryBlock, method.Body)
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    // Only add return instruction if block isn't terminated
-    if currentBlock.Term == nil {
-        if method.ReturnType.Value == "Object" {
-            currentBlock.NewRet(constant.NewNull(types.NewPointer(types.I8)))
-        } else {
-            currentBlock.NewRet(value)
-        }
-    }
+	// Only add return instruction if block isn't terminated
+	if currentBlock.Term == nil {
+		if method.ReturnType.Value == "Object" {
+			currentBlock.NewRet(constant.NewNull(types.NewPointer(types.I8)))
+		} else {
+			currentBlock.NewRet(value)
+		}
+	}
 
-    return nil
+	return nil
 }
 
 var i8Ptr = types.NewPointer(types.I8)
@@ -762,11 +803,18 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			constant.NewInt(types.I32, 0),
 			constant.NewInt(types.I32, 1),
 		)
-		// Get the field type of the 'value' field
-		fieldType := stringType.Fields[1]
-		// Cast string global to the correct type
-		strVal := block.NewBitCast(strGlobal, fieldType)
-		block.NewStore(strVal, valuePtr)
+
+		// Get pointer to string data
+		var strPtr value.Value
+		if arrType, ok := strGlobal.Type().(*types.ArrayType); ok {
+			strPtr = block.NewGetElementPtr(arrType, strGlobal,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+		} else {
+			strPtr = block.NewBitCast(strGlobal, types.NewPointer(types.I8))
+		}
+		block.NewStore(strPtr, valuePtr)
 
 		// Return the String object as i8*
 		return block.NewBitCast(obj, types.NewPointer(types.I8)), block, nil
@@ -1411,6 +1459,13 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "Object"}, Value: "Object"},
 				Body:       nil, // No body needed
 			},
+			&ast.Method{
+				Token:      lexer.Token{Literal: "method"},
+				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "type_name"}, Value: "type_name"},
+				Parameters: []*ast.Formal{},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+				Body:       nil,
+			},
 		},
 	}
 	// Create built-in IO class with its methods.
@@ -1502,4 +1557,90 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 
 	// Prepend built-in classes to the program
 	program.Classes = append([]*ast.Class{stringClass, ioClass, objectClass}, program.Classes...)
+}
+
+func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value, attrType string, initExpr ast.Expression) (*ir.Block, error) {
+	if initExpr != nil {
+		// Generate initialization expression
+		val, currentBlock, err := g.generateExpression(block, initExpr)
+		if err != nil {
+			return currentBlock, err
+		}
+
+		// Get the destination type
+		destPtrType := attrPtr.Type().(*types.PointerType)
+		destType := destPtrType.ElemType
+
+		// If we're initializing a String
+		if structType, ok := destType.(*types.PointerType); ok &&
+			structType.ElemType.Equal(g.classTypes["String"]) {
+			// Cast the value to the correct type if needed
+			if !val.Type().Equal(destType) {
+				val = currentBlock.NewBitCast(val, destType)
+			}
+		}
+
+		// Store the value
+		currentBlock.NewStore(val, attrPtr)
+		return currentBlock, nil
+	}
+
+	// Default initialization
+	var defaultVal value.Value
+	switch strings.ToLower(attrType) {
+	case "int":
+		defaultVal = constant.NewInt(types.I32, 0)
+	case "bool":
+		defaultVal = constant.NewInt(types.I1, 0)
+	case "string":
+		// Create empty string
+		stringType := g.classTypes["String"]
+		obj := block.NewAlloca(stringType)
+
+		// Set vtable
+		vtablePtr := block.NewGetElementPtr(stringType, obj,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
+		block.NewStore(
+			block.NewBitCast(g.vtables["String"], types.NewPointer(types.I8)),
+			vtablePtr,
+		)
+
+		// Set empty string value
+		emptyStr := g.getOrCreateStringConstant("")
+		valuePtr := block.NewGetElementPtr(stringType, obj,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 1),
+		)
+
+		var strPtr value.Value
+		if arrType, ok := emptyStr.Type().(*types.ArrayType); ok {
+			strPtr = block.NewGetElementPtr(arrType, emptyStr,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+		} else {
+			strPtr = block.NewBitCast(emptyStr, types.NewPointer(types.I8))
+		}
+		block.NewStore(strPtr, valuePtr)
+
+		// Store pointer to the String object
+		defaultVal = block.NewBitCast(obj, types.NewPointer(types.I8))
+	default:
+		if classType, exists := g.classTypes[attrType]; exists {
+			defaultVal = constant.NewNull(types.NewPointer(classType))
+		} else {
+			defaultVal = constant.NewNull(types.NewPointer(types.I8))
+		}
+	}
+
+	// Cast the default value to the correct type if needed
+	destPtrType := attrPtr.Type().(*types.PointerType)
+	if !defaultVal.Type().Equal(destPtrType.ElemType) {
+		defaultVal = block.NewBitCast(defaultVal, destPtrType.ElemType)
+	}
+
+	block.NewStore(defaultVal, attrPtr)
+	return block, nil
 }

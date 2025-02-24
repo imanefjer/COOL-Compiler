@@ -2,6 +2,7 @@
 class Main inherits IO {
     a: Int <- 10;
     b: String <- "Hello, World!";
+    c: String ;
     main() : Object { 
         {
             (new IO).out_string(b);
@@ -10,6 +11,8 @@ class Main inherits IO {
             (new IO).out_string(b.substr(0, 5));
             b <- b.concat("Hello");
             (new IO).out_string(b);
+            --c <- b.type_name();
+            --(new IO).out_string(c);
             
         }
     };
