@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-
+"sort"
 	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/constant"
 	"github.com/llir/llvm/ir/enum"
@@ -1060,6 +1060,168 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		endBlock := currentBlock.Parent.NewBlock("case.end")
 		var incoming []*ir.Incoming
 	
+		// Box primitive types if needed
+		if target.Type() == types.I32 {
+			fmt.Printf("DEBUG: Boxing Int value for case expression\n")
+			// Create Int object
+			intType := g.classTypes["Int"]
+			if intType == nil {
+				return nil, currentBlock, fmt.Errorf("Int type not found in class types")
+			}
+			
+			intObj := currentBlock.NewAlloca(intType)
+			
+			// Set vtable
+			vtablePtr := currentBlock.NewGetElementPtr(intType, intObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+			
+			if g.vtables["Int"] == nil {
+				return nil, currentBlock, fmt.Errorf("Int vtable not found")
+			}
+			
+			currentBlock.NewStore(
+				currentBlock.NewBitCast(g.vtables["Int"], types.NewPointer(types.I8)),
+				vtablePtr,
+			)
+			
+			// Set value field
+			valuePtr := currentBlock.NewGetElementPtr(intType, intObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 1),
+			)
+			currentBlock.NewStore(target, valuePtr)
+			
+			// Update target to use boxed object
+			target = currentBlock.NewBitCast(intObj, types.NewPointer(types.I8))
+		} else if target.Type() == types.I1 {
+			fmt.Printf("DEBUG: Boxing Bool value for case expression\n")
+			// Create Bool object
+			boolType := g.classTypes["Bool"]
+			if boolType == nil {
+				return nil, currentBlock, fmt.Errorf("Bool type not found in class types")
+			}
+			
+			boolObj := currentBlock.NewAlloca(boolType)
+			
+			// Set vtable
+			vtablePtr := currentBlock.NewGetElementPtr(boolType, boolObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+			
+			if g.vtables["Bool"] == nil {
+				return nil, currentBlock, fmt.Errorf("Bool vtable not found")
+			}
+			
+			currentBlock.NewStore(
+				currentBlock.NewBitCast(g.vtables["Bool"], types.NewPointer(types.I8)),
+				vtablePtr,
+			)
+			
+			// Set value field
+			valuePtr := currentBlock.NewGetElementPtr(boolType, boolObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 1),
+			)
+			fieldType := boolType.Fields[1]
+			if fieldType.Equal(types.I32) {
+				// If Bool.val is defined as i32, extend the i1 value
+				extendedBool := currentBlock.NewZExt(target, types.I32)
+				currentBlock.NewStore(extendedBool, valuePtr)
+			} else {
+				// If Bool.val is defined as i1, store directly
+				currentBlock.NewStore(target, valuePtr)
+			}
+			
+			// Update target to use boxed object
+			target = currentBlock.NewBitCast(boolObj, types.NewPointer(types.I8))
+		} else if ptrType, isPtrType := target.Type().(*types.PointerType); isPtrType {
+			if elemType, isIntPtr := ptrType.ElemType.(*types.IntType); isIntPtr {
+				// We have a pointer to an integer, need to load it first
+				fmt.Printf("DEBUG: Loading from integer pointer\n")
+				
+				loadedValue := currentBlock.NewLoad(elemType, target)
+				
+				if elemType.BitSize == 32 {
+					// Int boxing logic
+					intType := g.classTypes["Int"]
+					if intType == nil {
+						return nil, currentBlock, fmt.Errorf("Int type not found in class types")
+					}
+					
+					intObj := currentBlock.NewAlloca(intType)
+					
+					// Set vtable
+					vtablePtr := currentBlock.NewGetElementPtr(intType, intObj,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 0),
+					)
+					
+					if g.vtables["Int"] == nil {
+						return nil, currentBlock, fmt.Errorf("Int vtable not found")
+					}
+					
+					currentBlock.NewStore(
+						currentBlock.NewBitCast(g.vtables["Int"], types.NewPointer(types.I8)),
+						vtablePtr,
+					)
+					
+					// Set value field
+					valuePtr := currentBlock.NewGetElementPtr(intType, intObj,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 1),
+					)
+					currentBlock.NewStore(loadedValue, valuePtr)
+					
+					// Update target to use boxed object
+					target = currentBlock.NewBitCast(intObj, types.NewPointer(types.I8))
+				} else if elemType.BitSize == 1 {
+					// Bool boxing logic
+					boolType := g.classTypes["Bool"]
+					if boolType == nil {
+						return nil, currentBlock, fmt.Errorf("Bool type not found in class types")
+					}
+					
+					boolObj := currentBlock.NewAlloca(boolType)
+					
+					// Set vtable
+					vtablePtr := currentBlock.NewGetElementPtr(boolType, boolObj,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 0),
+					)
+					
+					if g.vtables["Bool"] == nil {
+						return nil, currentBlock, fmt.Errorf("Bool vtable not found")
+					}
+					
+					currentBlock.NewStore(
+						currentBlock.NewBitCast(g.vtables["Bool"], types.NewPointer(types.I8)),
+						vtablePtr,
+					)
+					
+					// Set value field
+					valuePtr := currentBlock.NewGetElementPtr(boolType, boolObj,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 1),
+					)
+					// Check the actual field type before storing
+					fieldType := boolType.Fields[1]
+					if fieldType.Equal(types.I32) {
+						// If Bool.val is defined as i32, extend the i1 value
+						extendedBool := currentBlock.NewZExt(loadedValue, types.I32)
+						currentBlock.NewStore(extendedBool, valuePtr)
+					} else {
+						// If Bool.val is defined as i1, store directly 
+						currentBlock.NewStore(loadedValue, valuePtr)
+					}
+					// Update target to use boxed object
+					target = currentBlock.NewBitCast(boolObj, types.NewPointer(types.I8))
+				}
+			}
+		}
+	
 		// Null check handling
 		nonNullBlock := currentBlock.Parent.NewBlock("case.non_null")
 		abortBlock := currentBlock.Parent.NewBlock("case.abort")
@@ -1076,6 +1238,17 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		abortBlock.NewCall(abortFunc)
 		abortBlock.NewUnreachable()
 	
+		// Find Object case early
+		var objectCase *ast.Case
+		// var objectCaseIndex int = -1
+		for _, c := range e.Cases {
+			if c.Type.Value == "Object" {
+				objectCase = c
+				// objectCaseIndex = i
+				break
+			}
+		}
+	
 		// Generate null check branch
 		if ptrType, ok := target.Type().(*types.PointerType); ok {
 			nullPtr := constant.NewNull(ptrType)
@@ -1086,188 +1259,299 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		}
 		currentBlock = nonNullBlock
 	
-		// Get vtable pointer from object
-		classType := types.NewStruct(types.NewPointer(types.I8)) // { i8* } for vtable
-		castedTarget := currentBlock.NewBitCast(target, types.NewPointer(classType))
-		vtablePtr := currentBlock.NewGetElementPtr(classType, castedTarget,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, 0),
-		)
-		vtablePtrVal := currentBlock.NewLoad(types.NewPointer(types.I8), vtablePtr)
+		// Create object case block
+		objectCaseBlock := currentBlock.Parent.NewBlock("case.object")
 	
-		// Determine target type
+		// Determine if we're dealing with a primitive type or class object
 		targetType := g.getClassNameFromType(target.Type())
 		isPrimitive := targetType == "Int" || targetType == "Bool" || targetType == "String"
 	
-		if isPrimitive {
-			// DIRECT COMPARISON FOR PRIMITIVE TYPES
-			var testBlocks []*ir.Block
-			for i := range e.Cases {
-				testBlocks = append(testBlocks, currentBlock.Parent.NewBlock(fmt.Sprintf("case.test.%d", i)))
+		// Filter cases excluding Object case
+		var nonObjectCases []*ast.Case
+		for _, c := range e.Cases {
+			if c.Type.Value != "Object" {
+				nonObjectCases = append(nonObjectCases, c)
 			}
-			defaultBlock := currentBlock.Parent.NewBlock("case.default")
+		}
+	
+		// Create test blocks for non-Object cases
+		var testBlocks []*ir.Block
+		for i := range nonObjectCases {
+			testBlocks = append(testBlocks, currentBlock.Parent.NewBlock(fmt.Sprintf("case.test.%d", i)))
+		}
+	
+		// Branch to first test block or directly to Object case if no other cases
+		if len(testBlocks) > 0 {
 			currentBlock.NewBr(testBlocks[0])
-	
-			for i, caseItem := range e.Cases {
-				currentBlock = testBlocks[i]
-				caseBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.body", i))
-				nextTestBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.next", i))
-	
-				// Allocate storage for the primitive value
-				varAlloca := currentBlock.NewAlloca(target.Type())
-				currentBlock.NewStore(target, varAlloca)
-	
-				// Compare type IDs directly
-				typeID := g.typeID(caseItem.Type.Value)
-				targetTypeID := g.typeID(targetType)
-				cmp := currentBlock.NewICmp(
-					enum.IPredEQ,
-					constant.NewInt(types.I32, int64(targetTypeID)),
-					constant.NewInt(types.I32, int64(typeID)),
-				)
-	
-				currentBlock.NewCondBr(cmp, caseBlock, nextTestBlock)
-	
-				// Handle case body
-				oldLocals := make(map[string]value.Value)
-				// oldTypes := make(map[string]string)
-				localName := caseItem.Name.Value
-	
-				// Store ALLOCA pointer in locals, not raw value
-				if existing, ok := g.locals[localName]; ok {
-					oldLocals[localName] = existing
-				}
-				g.locals[localName] = varAlloca
-				g.localsTypes[localName] = caseItem.Type.Value
-	
-				caseResult, bodyBlock, err := g.generateExpression(caseBlock, caseItem.Expression)
-				if err != nil {
-					return nil, bodyBlock, err
-				}
-	
-				// Restore previous variable state
-				if oldVal, exists := oldLocals[localName]; exists {
-					g.locals[localName] = oldVal
-				} else {
-					delete(g.locals, localName)
-				}
-	
-				bodyBlock.NewBr(endBlock)
-				incoming = append(incoming, ir.NewIncoming(caseResult, bodyBlock))
-	
-				// Link to next test case
-				if i < len(e.Cases)-1 {
-					nextTestBlock.NewBr(testBlocks[i+1])
-				} else {
-					nextTestBlock.NewBr(defaultBlock)
-				}
-				currentBlock = nextTestBlock
-			}
-	
-			// Handle default case
-			defaultBlock.NewBr(abortBlock)
-			incoming = append(incoming, ir.NewIncoming(constant.NewNull(types.I8Ptr), defaultBlock))
 		} else {
-			// Object type handling with inheritance traversal
-			var testBlocks []*ir.Block
-			for i := range e.Cases {
-				testBlocks = append(testBlocks, currentBlock.Parent.NewBlock(fmt.Sprintf("case.test.%d", i)))
-			}
-			defaultBlock := currentBlock.Parent.NewBlock("case.default")
-			currentBlock.NewBr(testBlocks[0])
+			currentBlock.NewBr(objectCaseBlock)
+		}
 	
-			for i, caseItem := range e.Cases {
-				currentBlock = testBlocks[i]
-				loopBody := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.loop.body", i))
-				noMatchBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.nomatch", i))
-				caseBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.body", i))
+		// Handle specific type cases
+		if len(nonObjectCases) > 0 {
+			if isPrimitive {
+				// For primitive types, do direct type ID comparison
+				for i, caseItem := range nonObjectCases {
+					currentBlock = testBlocks[i]
+					caseBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.body", i))
+					
+					// Next block is either the next test or the object case
+					nextBlock := objectCaseBlock
+					if i < len(nonObjectCases)-1 {
+						nextBlock = testBlocks[i+1]
+					}
 	
-				// Start inheritance traversal
-				currentBlock.NewBr(loopBody)
+					// Compare type IDs directly
+					typeID := g.typeID(caseItem.Type.Value)
+					targetTypeID := g.typeID(targetType)
+					cmp := currentBlock.NewICmp(
+						enum.IPredEQ,
+						constant.NewInt(types.I32, int64(targetTypeID)),
+						constant.NewInt(types.I32, int64(typeID)),
+					)
 	
-				// Loop body
-				currentVtable := loopBody.NewPhi(ir.NewIncoming(vtablePtrVal, currentBlock))
-				vtableHeaderType := types.NewStruct(
-					types.NewPointer(types.I8), // class name
-					types.NewPointer(types.I8), // parent vtable
-				)
+					currentBlock.NewCondBr(cmp, caseBlock, nextBlock)
 	
-				// Get class name from vtable
-				castedVtable := loopBody.NewBitCast(currentVtable, types.NewPointer(vtableHeaderType))
-				classNamePtrPtr := loopBody.NewGetElementPtr(vtableHeaderType, castedVtable,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 0),
-				)
-				classNamePtr := loopBody.NewLoad(types.I8Ptr, classNamePtrPtr)
+					// Handle case body
+					oldLocals := make(map[string]value.Value)
+					oldTypes := make(map[string]string)
+					localName := caseItem.Name.Value
 	
-				// Compare with case type
-				typeStr := g.getOrCreateStringConstant(caseItem.Type.Value)
-				typePtr := loopBody.NewGetElementPtr(
-					types.NewArray(uint64(len(caseItem.Type.Value)+1), types.I8),
-					typeStr,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 0),
-				)
+					// Create a local variable for the case branch
+					varAlloca := caseBlock.NewAlloca(target.Type())
+					caseBlock.NewStore(target, varAlloca)
+					
+					// Store previous local if it exists
+					if existing, ok := g.locals[localName]; ok {
+						oldLocals[localName] = existing
+					}
+					if existingType, ok := g.localsTypes[localName]; ok {
+						oldTypes[localName] = existingType
+					}
+					
+					// Set new local
+					g.locals[localName] = varAlloca
+					g.localsTypes[localName] = caseItem.Type.Value
 	
-				// String comparison
-				strcmp := g.module.NewFunc("strcmp", types.I32,
-					ir.NewParam("s1", types.I8Ptr),
-					ir.NewParam("s2", types.I8Ptr),
-				)
-				cmpResult := loopBody.NewCall(strcmp, classNamePtr, typePtr)
-				isMatch := loopBody.NewICmp(enum.IPredEQ, cmpResult, constant.NewInt(types.I32, 0))
+					// Generate case body
+					caseResult, bodyBlock, err := g.generateExpression(caseBlock, caseItem.Expression)
+					if err != nil {
+						return nil, bodyBlock, err
+					}
 	
-				// Branch based on match
-				loopBody.NewCondBr(isMatch, caseBlock, noMatchBlock)
+					// Restore previous locals
+					if oldVal, exists := oldLocals[localName]; exists {
+						g.locals[localName] = oldVal
+					} else {
+						delete(g.locals, localName)
+					}
+					if oldType, exists := oldTypes[localName]; exists {
+						g.localsTypes[localName] = oldType
+					} else {
+						delete(g.localsTypes, localName)
+					}
 	
-				// No match: check parent vtable
-				parentPtrPtr := noMatchBlock.NewGetElementPtr(vtableHeaderType, castedVtable,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 1),
-				)
-				parentVtable := noMatchBlock.NewLoad(types.I8Ptr, parentPtrPtr)
-	
-				// Check for Object or null
-				isObject := noMatchBlock.NewICmp(enum.IPredEQ, parentVtable,
-					constant.NewBitCast(g.vtables["Object"], types.I8Ptr))
-				isNull := noMatchBlock.NewICmp(enum.IPredEQ, parentVtable, constant.NewNull(types.I8Ptr))
-				isEnd := noMatchBlock.NewOr(isObject, isNull)
-				noMatchBlock.NewCondBr(isEnd, defaultBlock, loopBody)
-	
-				// Update PHI node
-				currentVtable.Incs = append(currentVtable.Incs, ir.NewIncoming(parentVtable, noMatchBlock))
-	
-				// Generate case body
-				oldLocals := g.locals
-				oldTypes := g.localsTypes
-				g.locals[caseItem.Name.Value] = target
-				g.localsTypes[caseItem.Name.Value] = caseItem.Type.Value
-	
-				caseResult, bodyBlock, err := g.generateExpression(caseBlock, caseItem.Expression)
-				if err != nil {
-					return nil, bodyBlock, err
+					bodyBlock.NewBr(endBlock)
+					incoming = append(incoming, ir.NewIncoming(caseResult, bodyBlock))
 				}
+			} else {
+				// For object types, check the class hierarchy
+				// Get the vtable pointer from the object
+				classType := types.NewStruct(types.NewPointer(types.I8)) // Generic object type with vtable ptr
+				castedTarget := currentBlock.NewBitCast(target, types.NewPointer(classType))
+				vtablePtr := currentBlock.NewGetElementPtr(classType, castedTarget,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				vtablePtrVal := currentBlock.NewLoad(types.NewPointer(types.I8), vtablePtr)
 	
-				// Restore locals
-				g.locals = oldLocals
-				g.localsTypes = oldTypes
+				// Sort non-object cases by inheritance depth (most specific first)
+				sortedCases := make([]*ast.Case, len(nonObjectCases))
+				copy(sortedCases, nonObjectCases)
+				sort.Slice(sortedCases, func(i, j int) bool {
+					return g.getTypeDepth(sortedCases[i].Type.Value) > g.getTypeDepth(sortedCases[j].Type.Value)
+				})
 	
-				bodyBlock.NewBr(endBlock)
-				incoming = append(incoming, ir.NewIncoming(caseResult, bodyBlock))
+				for i, caseItem := range sortedCases {
+					currentBlock = testBlocks[i]
+					loopBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.loop", i))
+					matchBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.match", i))
+					
+					// Next block is either the next test or the object case
+					nextBlock := objectCaseBlock
+					if i < len(sortedCases)-1 {
+						nextBlock = testBlocks[i+1]
+					}
 	
-				// Link next test block
-				if i < len(e.Cases)-1 {
-					testBlocks[i+1].NewBr(loopBody)
-				} else {
-					defaultBlock.NewBr(abortBlock)
+					// Start with current vtable and traverse the inheritance chain
+					currentBlock.NewBr(loopBlock)
+					
+					// Loop block for inheritance traversal
+					vtablePhi := loopBlock.NewPhi(ir.NewIncoming(vtablePtrVal, currentBlock))
+					
+					// Access vtable header to get class name
+					vtableHeaderType := types.NewStruct(
+						types.NewPointer(types.I8), // class name
+						types.NewPointer(types.I8), // parent vtable
+					)
+					castedVtable := loopBlock.NewBitCast(vtablePhi, types.NewPointer(vtableHeaderType))
+					
+					// Get class name from vtable
+					classNamePtrPtr := loopBlock.NewGetElementPtr(vtableHeaderType, castedVtable,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 0),
+					)
+					classNamePtr := loopBlock.NewLoad(types.NewPointer(types.I8), classNamePtrPtr)
+					
+					// Compare with case type using strcmp
+					typeStrConst := g.getOrCreateStringConstant(caseItem.Type.Value)
+					typeStrPtr := loopBlock.NewGetElementPtr(
+						types.NewArray(uint64(len(caseItem.Type.Value)+1), types.I8),
+						typeStrConst,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 0),
+					)
+					
+					// Get or declare strcmp
+					var strcmpFunc *ir.Func
+					for _, f := range g.module.Funcs {
+						if f.Name() == "strcmp" {
+							strcmpFunc = f
+							break
+						}
+					}
+					if strcmpFunc == nil {
+						strcmpFunc = g.module.NewFunc("strcmp", types.I32,
+							ir.NewParam("s1", types.NewPointer(types.I8)),
+							ir.NewParam("s2", types.NewPointer(types.I8)),
+						)
+					}
+					
+					// Call strcmp
+					cmpResult := loopBlock.NewCall(strcmpFunc, classNamePtr, typeStrPtr)
+					isMatch := loopBlock.NewICmp(enum.IPredEQ, cmpResult, constant.NewInt(types.I32, 0))
+					
+					// Check if we have a match
+					continueBlock := loopBlock.Parent.NewBlock(fmt.Sprintf("case.%d.continue", i))
+					loopBlock.NewCondBr(isMatch, matchBlock, continueBlock)
+					
+					// If no match, check parent vtable
+					parentVtablePtrPtr := loopBlock.NewGetElementPtr(vtableHeaderType, castedVtable,
+						constant.NewInt(types.I32, 0),
+						constant.NewInt(types.I32, 1),
+					)
+					parentVtablePtr := continueBlock.NewLoad(types.NewPointer(types.I8), parentVtablePtrPtr)
+					
+					// Check if we've reached Object or null (end of inheritance chain)
+					isNull := continueBlock.NewICmp(enum.IPredEQ, parentVtablePtr, 
+						constant.NewNull(types.NewPointer(types.I8)))
+					isObjectVtable := continueBlock.NewICmp(enum.IPredEQ, parentVtablePtr,
+						continueBlock.NewBitCast(g.vtables["Object"], types.NewPointer(types.I8)))
+					isEnd := continueBlock.NewOr(isNull, isObjectVtable)
+					
+					// Branch based on whether we've reached the end
+					continueBlock.NewCondBr(isEnd, nextBlock, loopBlock)
+					
+					// Update the vtable phi node with the parent vtable
+					vtablePhi.Incs = append(vtablePhi.Incs, ir.NewIncoming(parentVtablePtr, continueBlock))
+					
+					// Match block - execute the case body
+					// Save old locals
+					oldLocals := make(map[string]value.Value)
+					oldTypes := make(map[string]string)
+					localName := caseItem.Name.Value
+					
+					// Create a local variable for the case branch
+					if existing, ok := g.locals[localName]; ok {
+						oldLocals[localName] = existing
+					}
+					if existingType, ok := g.localsTypes[localName]; ok {
+						oldTypes[localName] = existingType
+					}
+					
+					// Set new local - using the target directly (no need for alloca+store)
+					g.locals[localName] = target  
+					g.localsTypes[localName] = caseItem.Type.Value
+					
+					// Generate case body
+					caseResult, bodyBlock, err := g.generateExpression(matchBlock, caseItem.Expression)
+					if err != nil {
+						return nil, bodyBlock, err
+					}
+					
+					// Restore previous locals
+					if oldVal, exists := oldLocals[localName]; exists {
+						g.locals[localName] = oldVal
+					} else {
+						delete(g.locals, localName)
+					}
+					if oldType, exists := oldTypes[localName]; exists {
+						g.localsTypes[localName] = oldType
+					} else {
+						delete(g.localsTypes, localName)
+					}
+					
+					bodyBlock.NewBr(endBlock)
+					incoming = append(incoming, ir.NewIncoming(caseResult, bodyBlock))
 				}
 			}
 		}
 	
-		// Create PHI node and final terminator
-		phi := endBlock.NewPhi(incoming...)
-		endBlock.NewRet(phi)
-		return phi, endBlock, nil
+		// Always handle Object case
+		if objectCase != nil {
+			// Set up locals for Object case
+			localName := objectCase.Name.Value
+			oldLocals := make(map[string]value.Value)
+			oldTypes := make(map[string]string)
+			
+			if existing, ok := g.locals[localName]; ok {
+				oldLocals[localName] = existing
+			}
+			if existingType, ok := g.localsTypes[localName]; ok {
+				oldTypes[localName] = existingType
+			}
+			
+			// Set local to target value
+			varAlloca := objectCaseBlock.NewAlloca(target.Type())
+			objectCaseBlock.NewStore(target, varAlloca)
+			g.locals[localName] = varAlloca
+			g.localsTypes[localName] = "Object"
+			
+			// Generate Object case body
+			objectResult, objectBodyBlock, err := g.generateExpression(objectCaseBlock, objectCase.Expression)
+			if err != nil {
+				return nil, objectBodyBlock, err
+			}
+			
+			// Restore locals
+			if oldVal, exists := oldLocals[localName]; exists {
+				g.locals[localName] = oldVal
+			} else {
+				delete(g.locals, localName)
+			}
+			if oldType, exists := oldTypes[localName]; exists {
+				g.localsTypes[localName] = oldType
+			} else {
+				delete(g.localsTypes, localName)
+			}
+			
+			// Branch to end block
+			objectBodyBlock.NewBr(endBlock)
+			incoming = append(incoming, ir.NewIncoming(objectResult, objectBodyBlock))
+		} else {
+			// This should never happen with well-typed COOL programs
+			objectCaseBlock.NewBr(abortBlock)
+			fmt.Printf("WARNING: No Object case found in case expression\n")
+		}
+		
+		// Create final phi node for the result
+		if len(incoming) > 0 {
+			phi := endBlock.NewPhi(incoming...)
+			return phi, endBlock, nil
+		} else {
+			// This should not happen with well-typed COOL programs
+			return constant.NewNull(types.NewPointer(types.I8)), endBlock, nil
+		}
 
 	case *ast.StringLiteral:
 		// Ensure null termination
@@ -1946,6 +2230,15 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 	}
 }
 
+// findObjectCase checks if there's a case for the Object type
+func findObjectCase(cases []*ast.Case) *ast.Case {
+    for _, c := range cases {
+        if c.Type.Value == "Object" {
+            return c
+        }
+    }
+    return nil
+}
 func (g *CodeGenerator) typeID(typeName string) int {
 	switch typeName {
 	case "Int":
@@ -2052,6 +2345,19 @@ func (g *CodeGenerator) castToType(block *ir.Block, val value.Value, targetType 
 	return block.NewBitCast(val, targetType)
 }
 
+func (g *CodeGenerator) getTypeDepth(typeName string) int {
+    depth := 0
+    current := typeName
+    for {
+        info, exists := g.classTable[current]
+        if !exists || info.Parent == "" {
+            break
+        }
+        depth++
+        current = info.Parent
+    }
+    return depth
+}
 // findCommonAncestor finds the common ancestor in the class hierarchy
 func (g *CodeGenerator) findCommonAncestor(classNames []string) string {
 	if len(classNames) == 0 {
@@ -2318,9 +2624,30 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 			},
 		},
 	}
-
+	boolClass := &ast.Class{
+        Token:  lexer.Token{Literal: "class"},
+        Name:   &ast.ObjectIdentifier{Token: lexer.Token{Literal: "Bool"}, Value: "Bool"},
+        Parent: &ast.TypeIdentifier{Token: lexer.Token{Literal: "inherits"}, Value: "Object"},
+        Features: []ast.Feature{
+            &ast.Attribute{
+                Name: &ast.ObjectIdentifier{Value: "val"},
+                Type: &ast.TypeIdentifier{Value: "Bool"},
+            },
+        },
+    }
+	intClass := &ast.Class{
+        Token:  lexer.Token{Literal: "class"},
+        Name:   &ast.ObjectIdentifier{Token: lexer.Token{Literal: "Int"}, Value: "Int"},
+        Parent: &ast.TypeIdentifier{Token: lexer.Token{Literal: "inherits"}, Value: "Object"},
+        Features: []ast.Feature{
+            &ast.Attribute{
+                Name: &ast.ObjectIdentifier{Value: "val"},
+                Type: &ast.TypeIdentifier{Value: "Int"},
+            },
+        },
+    }
 	// Prepend built-in classes to the program
-	program.Classes = append([]*ast.Class{stringClass, ioClass, objectClass}, program.Classes...)
+	program.Classes = append([]*ast.Class{stringClass, ioClass, objectClass, boolClass, intClass}, program.Classes...)
 }
 
 func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value, attrType string, initExpr ast.Expression) (*ir.Block, error) {

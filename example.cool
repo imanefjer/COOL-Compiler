@@ -35,23 +35,70 @@ class Dog inherits Animal {
         breed
     };
 };
+class Point {
+  x : Int;
+  y : Int;
+
+  init(x0 : Int, y0 : Int) : Point {
+    {
+      x <- x0;
+      y <- y0;
+      self;
+    }
+  };
+
+  getX() : Int { x };
+  getY() : Int { y };
+};
 
 class Main {
     a : Dog;
     b : Int;
     c : String;
+    e : Bool;
     d : Animal;
     main() : Object {
         {
-       
+            if isvoid a then {
+                        (new IO).out_string("is void");
+                    } else {
+                        (new IO).out_string(" is a ");
+                    }fi;
+
+            let myDog : Dog <- (new Dog).init("Buddy") in {
+                (new IO).out_string("Enter a name: ");
+                myDog.setName("testy");
+                (*let dog2 : Dog <- myDog.copy() in {
+                    (new IO).out_string(dog2.getName());
+                };*)
+                    
+                    
+                    (new IO).out_string(myDog.getName());
+                    (new IO).out_string(" is a ");
+
+                    (new IO).out_string(myDog.getBreed());
+                    (new IO).out_string(".\n");
+            };
+           
            -- a <- (new Dog).init("Buddy");
-           b <- 10;
+           --b <- 10;
+           e <- true;
             d <- (new Animal).init("Buddy");
-            case b of
+            case e of
                 x : Dog => (new IO).out_string("Dog\n");
-                y : Int => (new IO).out_string("Animal\n");
+               y : Bool => (new IO).out_string("Int\n");
+                a : Animal => (new IO).out_string("Bool\n");
                 z : Object => (new IO).out_string("String\n");
             esac;
+            (*
+            (new IO).out_string("Enter a string: ");
+            let input : String <- (new IO).in_string() in {
+                (new IO).out_string("You entered: ");
+                (new IO).out_string(input);
+                (new IO).out_string("\n");
+            };*)
+           
+            (new IO).out_string("Hello World\n");
         }
     };
 };
