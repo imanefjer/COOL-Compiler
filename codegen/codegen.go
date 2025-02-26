@@ -1206,7 +1206,7 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 						constant.NewInt(types.I32, 0),
 						constant.NewInt(types.I32, 1),
 					)
-					// Check the actual field type before storing
+									// Check the actual field type before storing
 					fieldType := boolType.Fields[1]
 					if fieldType.Equal(types.I32) {
 						// If Bool.val is defined as i32, extend the i1 value
@@ -1898,6 +1898,7 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			if methodFunc == nil {
 				return nil, block, fmt.Errorf("method %s not found", methodName)
 			}
+		
 
 			// Get the type name string
 			typeNameStr := g.getOrCreateStringConstant(receiverType)
@@ -1957,6 +1958,15 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			// Otherwise return the String object
 			// result := block.NewBitCast(stringObj, types.NewPointer(types.I8))
 			return stringObj, block, nil
+		}
+		//copy method
+		if e.Method.Value == "copy" {
+			methodName := fmt.Sprintf("%s_copy", receiverType)
+			methodFunc := g.methods[methodName]
+			if methodFunc == nil {
+				return nil, block, fmt.Errorf("method %s not found", methodName)
+			}
+			return receiverObj, block, nil
 		}
 
 		// Rest of the method call handling remains the same...
@@ -2520,6 +2530,13 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "type_name"}, Value: "type_name"},
 				Parameters: []*ast.Formal{},
 				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+				Body:       nil,
+			},
+			&ast.Method{
+				Token:      lexer.Token{Literal: "method"},
+				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "copy"}, Value: "copy"},
+				Parameters: []*ast.Formal{},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "SELF_TYPE"}, Value: "SELF_TYPE"},
 				Body:       nil,
 			},
 		},

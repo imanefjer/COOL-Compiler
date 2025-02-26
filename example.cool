@@ -51,7 +51,7 @@ class Point {
   getY() : Int { y };
 };
 
-class Main {
+class Main inherits IO{
     a : Dog;
     b : Int;
     c : String;
@@ -66,11 +66,19 @@ class Main {
                     }fi;
 
             let myDog : Dog <- (new Dog).init("Buddy") in {
-                (new IO).out_string("Enter a name: ");
-                myDog.setName("testy");
-                (*let dog2 : Dog <- myDog.copy() in {
+                out_string("Enter a name: ");
+                myDog.setName("test");
+                let dog2 : Dog <- myDog.copy() in {
                     (new IO).out_string(dog2.getName());
-                };*)
+                };
+                let num : Int <- 10 in {
+                    (new IO).out_string("\n");
+                    (new IO).out_int(num);
+                    let num2 : Int <- num.copy() in {
+                        (new IO).out_int(num2);
+                        (new IO).out_string("\n");
+                    };
+                };
                     
                     
                     (new IO).out_string(myDog.getName());
