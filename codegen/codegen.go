@@ -29,8 +29,10 @@ type CodeGenerator struct {
 }
 
 func NewCodeGenerator() *CodeGenerator {
+	module := ir.NewModule()
+	module.TargetTriple = "arm64-apple-macosx" // For M1/M2 Macs
 	return &CodeGenerator{
-		module:      ir.NewModule(),
+		module:      module,
 		classTypes:  make(map[string]*types.StructType),
 		vtables:     make(map[string]*ir.Global),
 		methods:     make(map[string]*ir.Func),
@@ -190,58 +192,6 @@ func (g *CodeGenerator) DeclareClasses(classes []*ast.Class) error {
 	return nil
 }
 
-// initializeVTables initializes the vtables for all classes
-func (g *CodeGenerator) initializeVTables(classes []*ast.Class) error {
-	for _, class := range classes {
-		// Count methods for vtable size
-		methodCount := 0
-		for _, feature := range class.Features {
-			if _, ok := feature.(*ast.Method); ok {
-				methodCount++
-			}
-		}
-
-		// Create string constants for class names
-		className := g.getOrCreateStringConstant(class.Name.Value)
-		parentClassName := g.getOrCreateStringConstant("Object")
-
-		// Create vtable type with correct size
-		vtableType := types.NewStruct(
-			types.NewPointer(types.I8),                                      // type name
-			types.NewPointer(types.I8),                                      // parent class name
-			types.NewArray(uint64(methodCount), types.NewPointer(types.I8)), // method array
-		)
-
-		// Create method list
-		methodList := make([]constant.Constant, 0, methodCount)
-		for _, feature := range class.Features {
-			if method, ok := feature.(*ast.Method); ok {
-				methodName := fmt.Sprintf("%s_%s", class.Name.Value, method.Name.Value)
-				fn := g.methods[methodName]
-				// Cast function to i8* for vtable
-				methodPtr := constant.NewBitCast(fn, types.NewPointer(types.I8))
-				methodList = append(methodList, methodPtr)
-			}
-		}
-
-		// Create vtable initializer
-		vtableInit := constant.NewStruct(vtableType,
-			constant.NewBitCast(className, types.NewPointer(types.I8)),
-			constant.NewBitCast(parentClassName, types.NewPointer(types.I8)),
-			constant.NewArray(types.NewArray(uint64(methodCount), types.NewPointer(types.I8)),
-				methodList...),
-		)
-
-		// Create vtable global
-		vtable := g.module.NewGlobalDef(
-			fmt.Sprintf("%s_vtable", class.Name.Value),
-			vtableInit,
-		)
-		g.vtables[class.Name.Value] = vtable
-	}
-	return nil
-}
-
 // generateClass handles code generation for a single class
 func (g *CodeGenerator) generateClass(class *ast.Class) error {
 	g.currentClass = class.Name.Value
@@ -265,7 +215,7 @@ func (g *CodeGenerator) generateProgramEntryPoint() error {
 	// Get Main class info and AST node
 	mainClassInfo, ok := g.classTable["Main"]
 	if !ok {
-		return fmt.Errorf("Main class not found")
+		return fmt.Errorf("main class not found")
 	}
 	var mainClassAST *ast.Class
 	for _, class := range g.program.Classes {
@@ -329,8 +279,29 @@ func (g *CodeGenerator) generateProgramEntryPoint() error {
 }
 
 func (g *CodeGenerator) generateMethod(className string, method *ast.Method) error {
-	fmt.Printf("DEBUG: Generating method %s for class %s\n", method.Name.Value, className)
-	fmt.Printf("DEBUG: Method body type: %T\n", method.Body)
+	fmt.Printf("\n=== Generating method %s_%s ===\n", className, method.Name.Value)
+
+	// Debug class layout
+	classInfo := g.classTable[className]
+	fmt.Printf("Class layout for %s:\n", className)
+	fmt.Printf("Parent class: %s\n", classInfo.Parent)
+	fmt.Printf("Attributes:\n")
+	for _, attr := range classInfo.Attributes {
+		fmt.Printf("  - %s (type: %s) at offset %d\n", attr.Name, attr.Type, attr.Offset)
+	}
+
+	// Debug method info
+	fmt.Printf("\nMethod details:\n")
+	fmt.Printf("  Name: %s\n", method.Name.Value)
+	fmt.Printf("  Return type: %s\n", method.ReturnType.Value)
+	fmt.Printf("  Parameters: ")
+	for _, param := range method.Parameters {
+		fmt.Printf("%s:%s ", param.Name.Value, param.Type.Value)
+	}
+	fmt.Printf("\n")
+
+	// Debug method body
+	fmt.Printf("\nMethod body type: %T\n", method.Body)
 
 	// Reset local variables for this method
 	g.locals = make(map[string]value.Value)
@@ -345,6 +316,55 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 
 	entryBlock := fn.NewBlock("entry")
 	fmt.Printf("DEBUG: Created entry block for method %s\n", methodName)
+	if method.Name.Value == "copy" {
+		currentClass := className
+		classType := g.classTypes[currentClass]
+
+		// Allocate new object
+		newObj := entryBlock.NewAlloca(classType)
+		newObjI8 := entryBlock.NewBitCast(newObj, types.NewPointer(types.I8))
+
+		// Copy vtable from self
+		self := entryBlock.Parent.Params[0]
+		selfPtr := entryBlock.NewBitCast(self, types.NewPointer(classType))
+		vtablePtr := entryBlock.NewGetElementPtr(classType, selfPtr, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+		vtableVal := entryBlock.NewLoad(types.NewPointer(types.I8), vtablePtr)
+		newVtablePtr := entryBlock.NewGetElementPtr(classType, newObj, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+		entryBlock.NewStore(vtableVal, newVtablePtr)
+
+		// Copy each attribute
+		classInfo := g.classTable[currentClass]
+		for _, attr := range classInfo.Attributes {
+			structFieldIndex := attr.Offset // Offset starts at 1 (vtable is at 0)
+			attrSrcPtr := entryBlock.NewGetElementPtr(classType, selfPtr,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, int64(structFieldIndex)),
+			)
+			// In generateMethod's copy handling:
+			attrVal := entryBlock.NewLoad(
+				classType.Fields[structFieldIndex], // Directly use the field type
+				attrSrcPtr,
+			)
+			attrDstPtr := entryBlock.NewGetElementPtr(classType, newObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, int64(structFieldIndex)),
+			)
+			fieldType := classType.Fields[structFieldIndex]
+
+			if fieldType, ok := fieldType.(*types.PointerType); ok {
+				if className := g.getClassNameFromType(fieldType); className != "" {
+					// Directly cast the pointer without loading its value
+					castedVal := entryBlock.NewBitCast(attrVal, fieldType)
+					entryBlock.NewStore(castedVal, attrDstPtr)
+					continue
+				}
+			}
+			entryBlock.NewStore(attrVal, attrDstPtr)
+		}
+
+		entryBlock.NewRet(newObjI8)
+		return nil
+	}
 	if method.Name.Value == "type_name" {
 		// Get self parameter
 		self := fn.Params[0]
@@ -358,21 +378,19 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 		)
 		vtablePtr := entryBlock.NewLoad(types.NewPointer(types.I8), vtablePtrPtr)
 
-		// Cast vtable pointer to correct type
-		vtableStructType := types.NewStruct(
-			types.NewPointer(types.I8),                    // class name
-			types.NewPointer(types.I8),                    // parent class name
-			types.NewArray(0, types.NewPointer(types.I8)), // methods
+		// Define a struct type for the vtable header (class name and parent)
+		vtableHeaderType := types.NewStruct(
+			types.NewPointer(types.I8), // class name
+			types.NewPointer(types.I8), // parent vtable
 		)
-		castedVtable := entryBlock.NewBitCast(vtablePtr, types.NewPointer(vtableStructType))
+		castedVtable := entryBlock.NewBitCast(vtablePtr, types.NewPointer(vtableHeaderType))
 
 		// Get class name pointer (first field of vtable)
-		classNamePtrPtr := entryBlock.NewGetElementPtr(vtableStructType, castedVtable,
+		classNamePtrPtr := entryBlock.NewGetElementPtr(vtableHeaderType, castedVtable,
 			constant.NewInt(types.I32, 0),
 			constant.NewInt(types.I32, 0),
 		)
 		classNamePtr := entryBlock.NewLoad(types.NewPointer(types.I8), classNamePtrPtr)
-
 		// Create new String object
 		stringType := g.classTypes["String"]
 		stringObj := entryBlock.NewAlloca(stringType)
@@ -629,6 +647,189 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 
 	// Special case for IO built-in methods
 	if className == "IO" {
+		if method.Name.Value == "in_string" {
+			// self := fn.Params[0] // Get self parameter
+			// entryBlock := fn.NewBlock("entry")
+
+			// Declare needed functions and globals
+			mallocFunc := g.getOrCreateMalloc()
+
+			 // Declare opaque FILE type
+			 fileType := types.NewStruct()
+			 fileType.SetName("struct.__sFILE")
+			 fileType.Opaque = true
+			 g.module.NewTypeDef("struct.__sFILE", fileType)
+			 // Declare stdin as external global (FILE*)
+			 var stdinGlobal *ir.Global
+			 for _, global := range g.module.Globals {
+				 if global.Name() == "__stdinp" {
+					 stdinGlobal = global
+					 break
+				 }
+			 }
+			 if stdinGlobal == nil {
+				// Define the global with the macOS-specific symbol name
+				fileType := types.NewStruct()
+				 // macOS's FILE type
+				fileType.SetName("struct.__sFILE")
+				fileType.Opaque = true
+				stdinGlobal = g.module.NewGlobal("__stdinp", types.NewPointer(types.NewPointer(fileType)))
+				stdinGlobal.Linkage = enum.LinkageExternal
+			}
+		 
+			 // Declare fgets with correct parameter types
+			 var fgetsFn *ir.Func
+			 for _, f := range g.module.Funcs {
+				 if f.Name() == "fgets" {
+					 fgetsFn = f
+					 break
+				 }
+			 }
+			 if fgetsFn == nil {
+				 fgetsFn = g.module.NewFunc(
+					 "fgets",
+					 types.I8Ptr,
+					 ir.NewParam("s", types.I8Ptr),
+					 ir.NewParam("size", types.I32),
+					 ir.NewParam("stream", types.NewPointer(fileType)),
+				 )
+			 }
+
+			 stdinVal := entryBlock.NewLoad(types.NewPointer(fileType), stdinGlobal)
+			 buffer := entryBlock.NewCall(mallocFunc, constant.NewInt(types.I64, 1024))
+			_ = entryBlock.NewCall(fgetsFn, buffer, constant.NewInt(types.I32, 1024), stdinVal)
+			// Allocate buffer (1024 bytes)
+			// bufferSize := constant.NewInt(types.I64, 1024)
+			// buffer := entryBlock.NewCall(mallocFunc, bufferSize)
+			// Remove newline character if present
+			var strchrFn *ir.Func
+			for _, f := range g.module.Funcs {
+				if f.Name() == "strchr" {
+					strchrFn = f
+					break
+				}
+			}
+			if strchrFn == nil {
+				strchrFn = g.module.NewFunc("strchr", types.I8Ptr,
+					ir.NewParam("s", types.I8Ptr),
+					ir.NewParam("c", types.I32),
+				)
+			}
+
+			// Find newline
+			newline := entryBlock.NewCall(strchrFn, buffer, constant.NewInt(types.I32, '\n'))
+			foundBlock := fn.NewBlock("in_string.found_newline")
+			continueBlock := fn.NewBlock("in_string.continue")
+
+			isNewline := entryBlock.NewICmp(enum.IPredNE, newline, constant.NewNull(types.I8Ptr))
+			entryBlock.NewCondBr(isNewline, foundBlock, continueBlock) // Terminator for entry block
+
+			// --- Handle foundBlock ---
+			foundBlock.NewStore(constant.NewInt(types.I8, 0), newline)
+			foundBlock.NewBr(continueBlock) // Terminator for foundBlock
+
+			// --- Handle continueBlock ---
+			// Build String object and return
+			stringType := g.classTypes["String"]
+			stringMem := continueBlock.NewCall(mallocFunc, constant.NewInt(types.I64, 16))
+			stringObj := continueBlock.NewBitCast(stringMem, types.NewPointer(stringType))
+
+			// Set vtable
+			vtablePtr := continueBlock.NewGetElementPtr(stringType, stringObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+			continueBlock.NewStore(
+				continueBlock.NewBitCast(g.vtables["String"], types.I8Ptr),
+				vtablePtr,
+			)
+
+			// Set value field
+			valuePtr := continueBlock.NewGetElementPtr(stringType, stringObj,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 1),
+			)
+			continueBlock.NewStore(buffer, valuePtr)
+
+			// Return statement (terminator for continueBlock)
+			result := continueBlock.NewBitCast(stringObj, types.I8Ptr)
+			continueBlock.NewRet(result) // Terminator for continueBlock
+
+			return nil
+		}
+		// Inside the IO class handling in generateMethod:
+if method.Name.Value == "in_int" {
+    // Declare needed functions
+    mallocFunc := g.getOrCreateMalloc()
+    var fgetsFn, strtolFn, abortFn *ir.Func
+
+    // Get or declare fgets
+    for _, f := range g.module.Funcs {
+        switch f.Name() {
+        case "fgets":
+            fgetsFn = f
+        case "strtol":
+            strtolFn = f
+        case "abort":
+            abortFn = f
+        }
+    }
+    
+    // Declare FILE type
+    fileType := types.NewStruct()
+    fileType.SetName("struct.__sFILE")
+    fileType.Opaque = true
+
+    // Get stdin global
+    var stdinGlobal *ir.Global
+    for _, global := range g.module.Globals {
+        if global.Name() == "__stdinp" {
+            stdinGlobal = global
+            break
+        }
+    }
+
+    // Declare strtol if not found
+    if strtolFn == nil {
+        strtolFn = g.module.NewFunc("strtol", types.I64,
+            ir.NewParam("nptr", types.I8Ptr),
+            ir.NewParam("endptr", types.NewPointer(types.I8Ptr)),
+            ir.NewParam("base", types.I32),
+        )
+    }
+
+    // Allocate buffer
+    buffer := entryBlock.NewCall(mallocFunc, constant.NewInt(types.I64, 1024))
+    
+    // Load stdin FILE*
+    stdinVal := entryBlock.NewLoad(types.NewPointer(fileType), stdinGlobal)
+    
+    // Call fgets
+    entryBlock.NewCall(fgetsFn, buffer, constant.NewInt(types.I32, 1024), stdinVal)
+
+    // Convert string to long
+    endPtr := entryBlock.NewAlloca(types.I8Ptr)
+    longVal := entryBlock.NewCall(strtolFn, buffer, endPtr, constant.NewInt(types.I32, 10))
+    
+    // Check conversion result
+    errorBlock := fn.NewBlock("in_int.error")
+    successBlock := fn.NewBlock("in_int.success")
+    
+    // Check if endPtr == buffer (no digits parsed)
+    cmp := entryBlock.NewICmp(enum.IPredEQ, endPtr, buffer)
+    entryBlock.NewCondBr(cmp, errorBlock, successBlock)
+
+    // Error handling
+    errorBlock.NewCall(abortFn)
+    errorBlock.NewUnreachable()
+
+    // Success case
+    // Truncate to i32 and return
+    intVal := successBlock.NewTrunc(longVal, types.I32)
+    successBlock.NewRet(intVal)
+
+    return nil
+}
 		// Handle out_string
 		if method.Name.Value == "out_string" {
 			self := fn.Params[0]
@@ -657,7 +858,7 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 			strValue := entryBlock.NewLoad(types.NewPointer(types.I8), valuePtr)
 
 			// Get format string
-			formatGlobal := g.getOrCreateStringConstant("%s\n")
+			formatGlobal := g.getOrCreateStringConstant("%s\x00") // Note explicit null terminator
 			var formatPtr value.Value
 			if arrType, ok := formatGlobal.Type().(*types.ArrayType); ok {
 				formatPtr = entryBlock.NewGetElementPtr(arrType, formatGlobal,
@@ -714,31 +915,42 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 	}
 	typedSelf := entryBlock.NewBitCast(self, types.NewPointer(classType))
 	g.locals["$self"] = typedSelf
-	g.localsTypes["$self"] = className // Store the static type of self.
+	g.localsTypes["$self"] = className
+	g.locals["self"] = typedSelf
+	g.localsTypes["self"] = className
+	// Process method parameters and add them to locals
+	for i, astParam := range method.Parameters {
+		if i+1 >= len(fn.Params) {
+			return fmt.Errorf("parameter %s not found in LLVM function parameters", astParam.Name.Value)
+		}
+		llvmParam := fn.Params[i+1] // i+1 because 0 is self
+
+		// Allocate space for the parameter
+		paramAlloca := entryBlock.NewAlloca(llvmParam.Type())
+		entryBlock.NewStore(llvmParam, paramAlloca)
+
+		// Add to locals with the AST parameter name
+		g.locals[astParam.Name.Value] = paramAlloca
+		g.localsTypes[astParam.Name.Value] = astParam.Type.Value
+	}
 
 	// Ensure all class attributes are added to locals
-	if attrNames, exists := g.classAttrs[className]; exists {
-		for i, attrName := range attrNames {
-			attrPtr := entryBlock.NewGetElementPtr(
-				classType,
-				typedSelf,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, int64(i+1)), // +1 for vtable
-			)
-			g.locals[attrName] = attrPtr
-			fmt.Printf("DEBUG: Added attribute %s to locals for class %s\n", attrName, className)
-		}
-	} else {
-		return fmt.Errorf("no attributes found for class %s", className)
-	}
-	for i, attrName := range g.classAttrs[className] {
+	classInfo = g.classTable[className]
+	for _, attr := range classInfo.Attributes {
+		// Calculate field index (offset includes vtable pointer at 0)
+		fieldIndex := attr.Offset
+
+		// Get pointer to attribute using classType
 		attrPtr := entryBlock.NewGetElementPtr(
 			classType,
 			typedSelf,
 			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, int64(i+1)),
+			constant.NewInt(types.I32, int64(fieldIndex)),
 		)
-		g.locals[attrName] = attrPtr
+
+		// Store in locals using actual attribute name
+		g.locals[attr.Name] = attrPtr
+		fmt.Printf("DEBUG: Added attribute %s (offset %d) to locals\n", attr.Name, fieldIndex)
 	}
 
 	value, currentBlock, err := g.generateExpression(entryBlock, method.Body)
@@ -746,20 +958,73 @@ func (g *CodeGenerator) generateMethod(className string, method *ast.Method) err
 		return err
 	}
 
-	// Only add return instruction if block isn't terminated
+	// Ensure block termination
 	if currentBlock.Term == nil {
-		if method.ReturnType.Value == "Object" {
-			currentBlock.NewRet(constant.NewNull(types.NewPointer(types.I8)))
+		// Handle void return types
+		if method.ReturnType.Value == "Void" || method.ReturnType.Value == "Unit" {
+			currentBlock.NewRet(nil)
 		} else {
+			// Default return value if missing
+			if value == nil {
+				value = constant.NewNull(types.NewPointer(types.I8))
+			}
 			currentBlock.NewRet(value)
 		}
 	}
 
+	// Add explicit terminator for entry block if needed
+	if entryBlock.Term == nil {
+		entryBlock.NewBr(currentBlock)
+	}
+
+	fmt.Printf("=== End generating method %s_%s ===\n\n", className, method.Name.Value)
 	return nil
 }
 
 var i8Ptr = types.NewPointer(types.I8)
 
+func (g *CodeGenerator) boxPrimitive(block *ir.Block, val value.Value, primType string) (value.Value, *ir.Block, error) {
+    className := primType
+    classType := g.classTypes[className]
+    if classType == nil {
+        return nil, block, fmt.Errorf("cannot box %s: no class type", primType)
+    }
+
+    // Allocate object
+    obj := block.NewAlloca(classType)
+    objPtr := block.NewBitCast(obj, types.NewPointer(types.I8))
+
+    // Initialize vtable
+    vtablePtr := block.NewGetElementPtr(classType, obj,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, 0),
+    )
+    block.NewStore(
+        block.NewBitCast(g.vtables[className], types.NewPointer(types.I8)),
+        vtablePtr,
+    )
+
+    // Store primitive value in attribute
+    attrOffset := 1 // Assuming value is at offset 1
+    attrPtr := block.NewGetElementPtr(classType, obj,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, int64(attrOffset)),
+    )
+
+    // Cast value to correct type
+    var castVal value.Value
+    switch primType {
+    case "Int":
+        castVal = val
+    case "Bool":
+        castVal = block.NewZExt(val, types.I32)
+    default:
+        return nil, block, fmt.Errorf("unsupported boxing for %s", primType)
+    }
+
+    block.NewStore(castVal, attrPtr)
+    return objPtr, block, nil
+}
 // generateExpression handles code generation for expressions
 func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression) (value.Value, *ir.Block, error) {
 	// Add debug logging at the start
@@ -780,16 +1045,250 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			return constant.NewInt(types.I1, 1), block, nil
 		}
 		return constant.NewInt(types.I1, 0), block, nil
+
+		// Replace the CaseExpression case in the generateExpression function with this implementation
+	case *ast.CaseExpression:
+		fmt.Printf("DEBUG: Generating case expression\n")
+	
+		// Evaluate target expression
+		target, currentBlock, err := g.generateExpression(block, e.Expression)
+		if err != nil {
+			return nil, currentBlock, err
+		}
+	
+		// Create control flow blocks
+		endBlock := currentBlock.Parent.NewBlock("case.end")
+		var incoming []*ir.Incoming
+	
+		// Null check handling
+		nonNullBlock := currentBlock.Parent.NewBlock("case.non_null")
+		abortBlock := currentBlock.Parent.NewBlock("case.abort")
+		var abortFunc *ir.Func
+		for _, f := range g.module.Funcs {
+			if f.Name() == "abort" {
+				abortFunc = f
+				break
+			}
+		}
+		if abortFunc == nil {
+			abortFunc = g.module.NewFunc("abort", types.Void)
+		}
+		abortBlock.NewCall(abortFunc)
+		abortBlock.NewUnreachable()
+	
+		// Generate null check branch
+		if ptrType, ok := target.Type().(*types.PointerType); ok {
+			nullPtr := constant.NewNull(ptrType)
+			isNull := currentBlock.NewICmp(enum.IPredEQ, target, nullPtr)
+			currentBlock.NewCondBr(isNull, abortBlock, nonNullBlock)
+		} else {
+			currentBlock.NewBr(nonNullBlock)
+		}
+		currentBlock = nonNullBlock
+	
+		// Get vtable pointer from object
+		classType := types.NewStruct(types.NewPointer(types.I8)) // { i8* } for vtable
+		castedTarget := currentBlock.NewBitCast(target, types.NewPointer(classType))
+		vtablePtr := currentBlock.NewGetElementPtr(classType, castedTarget,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
+		vtablePtrVal := currentBlock.NewLoad(types.NewPointer(types.I8), vtablePtr)
+	
+		// Determine target type
+		targetType := g.getClassNameFromType(target.Type())
+		isPrimitive := targetType == "Int" || targetType == "Bool" || targetType == "String"
+	
+		if isPrimitive {
+			// DIRECT COMPARISON FOR PRIMITIVE TYPES
+			var testBlocks []*ir.Block
+			for i := range e.Cases {
+				testBlocks = append(testBlocks, currentBlock.Parent.NewBlock(fmt.Sprintf("case.test.%d", i)))
+			}
+			defaultBlock := currentBlock.Parent.NewBlock("case.default")
+			currentBlock.NewBr(testBlocks[0])
+	
+			for i, caseItem := range e.Cases {
+				currentBlock = testBlocks[i]
+				caseBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.body", i))
+				nextTestBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.next", i))
+	
+				// Allocate storage for the primitive value
+				varAlloca := currentBlock.NewAlloca(target.Type())
+				currentBlock.NewStore(target, varAlloca)
+	
+				// Compare type IDs directly
+				typeID := g.typeID(caseItem.Type.Value)
+				targetTypeID := g.typeID(targetType)
+				cmp := currentBlock.NewICmp(
+					enum.IPredEQ,
+					constant.NewInt(types.I32, int64(targetTypeID)),
+					constant.NewInt(types.I32, int64(typeID)),
+				)
+	
+				currentBlock.NewCondBr(cmp, caseBlock, nextTestBlock)
+	
+				// Handle case body
+				oldLocals := make(map[string]value.Value)
+				// oldTypes := make(map[string]string)
+				localName := caseItem.Name.Value
+	
+				// Store ALLOCA pointer in locals, not raw value
+				if existing, ok := g.locals[localName]; ok {
+					oldLocals[localName] = existing
+				}
+				g.locals[localName] = varAlloca
+				g.localsTypes[localName] = caseItem.Type.Value
+	
+				caseResult, bodyBlock, err := g.generateExpression(caseBlock, caseItem.Expression)
+				if err != nil {
+					return nil, bodyBlock, err
+				}
+	
+				// Restore previous variable state
+				if oldVal, exists := oldLocals[localName]; exists {
+					g.locals[localName] = oldVal
+				} else {
+					delete(g.locals, localName)
+				}
+	
+				bodyBlock.NewBr(endBlock)
+				incoming = append(incoming, ir.NewIncoming(caseResult, bodyBlock))
+	
+				// Link to next test case
+				if i < len(e.Cases)-1 {
+					nextTestBlock.NewBr(testBlocks[i+1])
+				} else {
+					nextTestBlock.NewBr(defaultBlock)
+				}
+				currentBlock = nextTestBlock
+			}
+	
+			// Handle default case
+			defaultBlock.NewBr(abortBlock)
+			incoming = append(incoming, ir.NewIncoming(constant.NewNull(types.I8Ptr), defaultBlock))
+		} else {
+			// Object type handling with inheritance traversal
+			var testBlocks []*ir.Block
+			for i := range e.Cases {
+				testBlocks = append(testBlocks, currentBlock.Parent.NewBlock(fmt.Sprintf("case.test.%d", i)))
+			}
+			defaultBlock := currentBlock.Parent.NewBlock("case.default")
+			currentBlock.NewBr(testBlocks[0])
+	
+			for i, caseItem := range e.Cases {
+				currentBlock = testBlocks[i]
+				loopBody := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.loop.body", i))
+				noMatchBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.nomatch", i))
+				caseBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("case.%d.body", i))
+	
+				// Start inheritance traversal
+				currentBlock.NewBr(loopBody)
+	
+				// Loop body
+				currentVtable := loopBody.NewPhi(ir.NewIncoming(vtablePtrVal, currentBlock))
+				vtableHeaderType := types.NewStruct(
+					types.NewPointer(types.I8), // class name
+					types.NewPointer(types.I8), // parent vtable
+				)
+	
+				// Get class name from vtable
+				castedVtable := loopBody.NewBitCast(currentVtable, types.NewPointer(vtableHeaderType))
+				classNamePtrPtr := loopBody.NewGetElementPtr(vtableHeaderType, castedVtable,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				classNamePtr := loopBody.NewLoad(types.I8Ptr, classNamePtrPtr)
+	
+				// Compare with case type
+				typeStr := g.getOrCreateStringConstant(caseItem.Type.Value)
+				typePtr := loopBody.NewGetElementPtr(
+					types.NewArray(uint64(len(caseItem.Type.Value)+1), types.I8),
+					typeStr,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+	
+				// String comparison
+				strcmp := g.module.NewFunc("strcmp", types.I32,
+					ir.NewParam("s1", types.I8Ptr),
+					ir.NewParam("s2", types.I8Ptr),
+				)
+				cmpResult := loopBody.NewCall(strcmp, classNamePtr, typePtr)
+				isMatch := loopBody.NewICmp(enum.IPredEQ, cmpResult, constant.NewInt(types.I32, 0))
+	
+				// Branch based on match
+				loopBody.NewCondBr(isMatch, caseBlock, noMatchBlock)
+	
+				// No match: check parent vtable
+				parentPtrPtr := noMatchBlock.NewGetElementPtr(vtableHeaderType, castedVtable,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+				parentVtable := noMatchBlock.NewLoad(types.I8Ptr, parentPtrPtr)
+	
+				// Check for Object or null
+				isObject := noMatchBlock.NewICmp(enum.IPredEQ, parentVtable,
+					constant.NewBitCast(g.vtables["Object"], types.I8Ptr))
+				isNull := noMatchBlock.NewICmp(enum.IPredEQ, parentVtable, constant.NewNull(types.I8Ptr))
+				isEnd := noMatchBlock.NewOr(isObject, isNull)
+				noMatchBlock.NewCondBr(isEnd, defaultBlock, loopBody)
+	
+				// Update PHI node
+				currentVtable.Incs = append(currentVtable.Incs, ir.NewIncoming(parentVtable, noMatchBlock))
+	
+				// Generate case body
+				oldLocals := g.locals
+				oldTypes := g.localsTypes
+				g.locals[caseItem.Name.Value] = target
+				g.localsTypes[caseItem.Name.Value] = caseItem.Type.Value
+	
+				caseResult, bodyBlock, err := g.generateExpression(caseBlock, caseItem.Expression)
+				if err != nil {
+					return nil, bodyBlock, err
+				}
+	
+				// Restore locals
+				g.locals = oldLocals
+				g.localsTypes = oldTypes
+	
+				bodyBlock.NewBr(endBlock)
+				incoming = append(incoming, ir.NewIncoming(caseResult, bodyBlock))
+	
+				// Link next test block
+				if i < len(e.Cases)-1 {
+					testBlocks[i+1].NewBr(loopBody)
+				} else {
+					defaultBlock.NewBr(abortBlock)
+				}
+			}
+		}
+	
+		// Create PHI node and final terminator
+		phi := endBlock.NewPhi(incoming...)
+		endBlock.NewRet(phi)
+		return phi, endBlock, nil
+
 	case *ast.StringLiteral:
-		// Create global string constant
-		strGlobal := g.getOrCreateStringConstant(e.Value)
+		// Ensure null termination
+		strWithNull := e.Value + "\x00"
+		strGlobal := g.getOrCreateStringConstant(strWithNull)
 
-		// Allocate String object
-		stringType := g.classTypes["String"]
-		obj := block.NewAlloca(stringType)
+		// Get pointer to first character
+		arrType := types.NewArray(uint64(len(strWithNull)), types.I8)
+		strPtr := block.NewGetElementPtr(arrType, strGlobal,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		)
 
-		// Initialize vtable pointer (first field)
-		vtablePtr := block.NewGetElementPtr(stringType, obj,
+		// Allocate String object on the heap
+		mallocFunc := g.getOrCreateMalloc()
+		stringSize := constant.NewInt(types.I64, 16) // Size of String struct
+		stringObjMem := block.NewCall(mallocFunc, stringSize)
+		stringObj := block.NewBitCast(stringObjMem, types.NewPointer(g.classTypes["String"]))
+
+		// Initialize vtable
+		vtablePtr := block.NewGetElementPtr(g.classTypes["String"], stringObj,
 			constant.NewInt(types.I32, 0),
 			constant.NewInt(types.I32, 0),
 		)
@@ -798,26 +1297,14 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			vtablePtr,
 		)
 
-		// Initialize 'value' field (second field)
-		valuePtr := block.NewGetElementPtr(stringType, obj,
+		// Set value field
+		valuePtr := block.NewGetElementPtr(g.classTypes["String"], stringObj,
 			constant.NewInt(types.I32, 0),
 			constant.NewInt(types.I32, 1),
 		)
-
-		// Get pointer to string data
-		var strPtr value.Value
-		if arrType, ok := strGlobal.Type().(*types.ArrayType); ok {
-			strPtr = block.NewGetElementPtr(arrType, strGlobal,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, 0),
-			)
-		} else {
-			strPtr = block.NewBitCast(strGlobal, types.NewPointer(types.I8))
-		}
 		block.NewStore(strPtr, valuePtr)
 
-		// Return the String object as i8*
-		return block.NewBitCast(obj, types.NewPointer(types.I8)), block, nil
+		return stringObj, block, nil
 	case *ast.InfixExpression:
 		// Generate code for left and right expressions
 		left, leftBlock, err := g.generateExpression(block, e.Left)
@@ -842,6 +1329,9 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			return rightBlock.NewSDiv(left, right), rightBlock, nil
 		case "<":
 			cmp := rightBlock.NewICmp(enum.IPredSLT, left, right)
+			return rightBlock.NewZExt(cmp, types.I32), rightBlock, nil
+		case "=":
+			cmp := rightBlock.NewICmp(enum.IPredEQ, left, right)
 			return rightBlock.NewZExt(cmp, types.I32), rightBlock, nil
 		default:
 			return nil, rightBlock, fmt.Errorf("unsupported operator: %s", e.Operator)
@@ -925,6 +1415,10 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		oldValue, exists := g.locals[e.Name.Value]
 		g.locals[e.Name.Value] = varAlloca
 
+		// NEW: Record the variable's type in localsTypes
+		oldType, typeExists := g.localsTypes[e.Name.Value]
+		g.localsTypes[e.Name.Value] = e.Type.Value
+
 		// Generate code for the let body
 		bodyValue, bodyBlock, err := g.generateExpression(initBlock, e.Body)
 		if err != nil {
@@ -938,8 +1432,35 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			delete(g.locals, e.Name.Value)
 		}
 
+		// NEW: Restore the old type
+		if typeExists {
+			g.localsTypes[e.Name.Value] = oldType
+		} else {
+			delete(g.localsTypes, e.Name.Value)
+		}
+
 		return bodyValue, bodyBlock, nil
 	case *ast.ObjectIdentifier:
+		fmt.Printf("\nDEBUG: Accessing identifier: %s\n", e.Value)
+
+		if e.Value == "self" {
+			if selfVal, exists := g.locals["self"]; exists {
+				return selfVal, block, nil
+			}
+			return nil, block, fmt.Errorf("self not found in locals")
+		}
+
+		// Existing code for other variables...
+		if varAlloca, exists := g.locals[e.Value]; exists {
+			fmt.Printf("DEBUG: Found in locals at: %v\n", varAlloca)
+
+			ptrType, ok := varAlloca.Type().(*types.PointerType)
+			if !ok {
+				return nil, block, fmt.Errorf("unexpected type for variable: %s", e.Value)
+			}
+			loadInst := block.NewLoad(ptrType.ElemType, varAlloca)
+			return loadInst, block, nil
+		}
 		// First check local variables.
 		if varAlloca, exists := g.locals[e.Value]; exists {
 			ptrType, ok := varAlloca.Type().(*types.PointerType)
@@ -960,15 +1481,20 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		if g.currentClass != "" {
 			// Find attribute info.
 			classInfo := g.classTable[g.currentClass]
+			fmt.Printf("DEBUG: Looking for attribute in class %s\n", g.currentClass)
+
 			var attrInfo *AttributeInfo
 			for i := range classInfo.Attributes {
 				attr := &classInfo.Attributes[i] // Get pointer to the actual element
+				fmt.Printf("DEBUG: Checking attribute %s at offset %d\n", attr.Name, attr.Offset)
 				if attr.Name == e.Value {
 					attrInfo = attr
 					break
 				}
 			}
 			if attrInfo != nil {
+				fmt.Printf("DEBUG: Found attribute %s at offset %d\n", attrInfo.Name, attrInfo.Offset)
+
 				// Get the self parameter from the parent block.
 				self := block.Parent.Params[0]
 				classType := g.classTypes[g.currentClass]
@@ -987,6 +1513,7 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 				attrPtr := block.NewGetElementPtr(classType, selfPtr, indices...)
 				// Load the attribute value.
 				fieldType := classType.Fields[attrInfo.Offset]
+				fmt.Printf("DEBUG: Generated GEP instruction for attribute access at offset %d\n", attrInfo.Offset)
 				loadInst := block.NewLoad(fieldType, attrPtr)
 				return loadInst, block, nil
 			}
@@ -1080,6 +1607,7 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		// Special handling for type_name method on primitive types
 		if e.Method.Value == "type_name" {
 			// For primitive types (Bool, Int), use Object's type_name implementation
+			
 			methodName := "Object_type_name"
 			methodFunc := g.methods[methodName]
 
@@ -1135,7 +1663,7 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 					strlen = g.module.NewFunc("strlen", types.I64,
 						ir.NewParam("str", types.NewPointer(types.I8)))
 				}
-				
+
 				// Get length of the type name string
 				length := block.NewCall(strlen, strPtr)
 				// Convert length to i32
@@ -1143,8 +1671,8 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			}
 
 			// Otherwise return the String object
-			result := block.NewBitCast(stringObj, types.NewPointer(types.I8))
-			return result, block, nil
+			// result := block.NewBitCast(stringObj, types.NewPointer(types.I8))
+			return stringObj, block, nil
 		}
 
 		// Rest of the method call handling remains the same...
@@ -1163,14 +1691,24 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 
 		// Generate arguments
 		args := make([]value.Value, 0, len(e.Arguments)+1)
-		args = append(args, receiverObj)
-
+		if receiverType == "Int" || receiverType == "Bool" {
+			args = append(args, receiverObj)
+		} else {
+			args = append(args, block.NewBitCast(receiverObj, types.I8Ptr))
+		}
 		for _, arg := range e.Arguments {
 			argVal, newBlock, err := g.generateExpression(block, arg)
 			if err != nil {
 				return nil, newBlock, err
 			}
 			block = newBlock
+	
+			// Cast object arguments to i8*
+			if ptrType, ok := argVal.Type().(*types.PointerType); ok {
+				if _, isObject := g.classTypes[g.getClassNameFromType(ptrType)]; isObject {
+					argVal = block.NewBitCast(argVal, types.I8Ptr)
+				}
+			}
 			args = append(args, argVal)
 		}
 
@@ -1267,27 +1805,41 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		castedVtable := block.NewBitCast(vtable, i8Ptr)
 		block.NewStore(castedVtable, vtablePtr)
 
+		// Initialize attributes using class-defined initializers
 		for _, attr := range info.Attributes {
+			// Find the AST attribute to get the initializer expression
+			var attrAST *ast.Attribute
+			for _, class := range g.program.Classes {
+				if class.Name.Value == e.Type.Value {
+					for _, feature := range class.Features {
+						if a, ok := feature.(*ast.Attribute); ok && a.Name.Value == attr.Name {
+							attrAST = a
+							break
+						}
+					}
+					if attrAST != nil {
+						break
+					}
+				}
+			}
+
+			// Get pointer to the current attribute
 			attrPtr := block.NewGetElementPtr(classType, objPtr,
 				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, int64(attr.Offset)))
-			var defaultVal value.Value
-			switch strings.ToLower(attr.Type) {
-			case "int":
-				defaultVal = constant.NewInt(types.I32, 0)
-			case "bool":
-				defaultVal = constant.NewInt(types.I1, 0)
-			case "string":
-				emptyStr := g.getOrCreateStringConstant("")
-				defaultVal = block.NewBitCast(emptyStr, i8Ptr)
-			default:
-				objType, exists := g.classTypes[attr.Type]
-				if !exists {
-					return nil, block, fmt.Errorf("unknown attribute type: %s", attr.Type)
-				}
-				defaultVal = constant.NewNull(types.NewPointer(objType))
+				constant.NewInt(types.I32, int64(attr.Offset)),
+			)
+
+			// Generate code for the initializer if present
+			var initExpr ast.Expression
+			if attrAST != nil {
+				initExpr = attrAST.Init
 			}
-			block.NewStore(defaultVal, attrPtr)
+
+			var err error
+			block, err = g.initializeAttribute(block, attrPtr, attr.Type, initExpr)
+			if err != nil {
+				return nil, block, fmt.Errorf("error initializing attribute %s: %v", attr.Name, err)
+			}
 		}
 
 		return block.NewBitCast(objPtr, i8Ptr), block, nil
@@ -1394,18 +1946,156 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 	}
 }
 
-// getMethodIndex returns the index of a method in the vtable
-func (g *CodeGenerator) getMethodIndex(methodName string) int64 {
-	// TODO: implement proper method indexing based on class hierarchy
-	switch methodName {
-	case "main":
-		return 0
+func (g *CodeGenerator) typeID(typeName string) int {
+	switch typeName {
+	case "Int":
+		return 1
+	case "Bool":
+		return 2
+	case "String":
+		return 3
 	default:
-		return 0 // For now, return 0 for all methods
+		return 0
 	}
 }
+
+// determineCommonType analyzes a list of values and determines a common type they can all be cast to
+func (g *CodeGenerator) determineCommonType(values []value.Value) types.Type {
+	if len(values) == 0 {
+		return types.NewPointer(types.I8) // Default to i8* as fallback
+	}
+
+	// Start with the first type
+	commonType := values[0].Type()
+
+	// If all values have the same type, just return that type
+	allSameType := true
+	for _, val := range values {
+		if !val.Type().Equal(commonType) {
+			allSameType = false
+			break
+		}
+	}
+	if allSameType {
+		return commonType
+	}
+
+	// If we have mixed pointer and non-pointer types, choose i8*
+	hasPointer := false
+	hasNonPointer := false
+	for _, val := range values {
+		if _, isPtr := val.Type().(*types.PointerType); isPtr {
+			hasPointer = true
+		} else {
+			hasNonPointer = true
+		}
+	}
+	if hasPointer && hasNonPointer {
+		return types.NewPointer(types.I8)
+	}
+
+	// If all are pointers, choose i8* as the common type
+	if hasPointer && !hasNonPointer {
+		return types.NewPointer(types.I8)
+	}
+
+	// If all are integers (i1, i32), choose the larger type
+	maxBitWidth := uint64(0)
+	allIntegers := true
+
+	for _, val := range values {
+		if intType, isInt := val.Type().(*types.IntType); isInt {
+			if intType.BitSize > maxBitWidth {
+				maxBitWidth = intType.BitSize
+			}
+		} else {
+			allIntegers = false
+			break
+		}
+	}
+
+	if allIntegers {
+		return types.NewInt(maxBitWidth)
+	}
+
+	// Default to i8* as the most generic type
+	return types.NewPointer(types.I8)
+}
+
+// castToType casts a value to the target type if needed
+func (g *CodeGenerator) castToType(block *ir.Block, val value.Value, targetType types.Type) value.Value {
+	// If types are already the same, no need to cast
+	if val.Type().Equal(targetType) {
+		return val
+	}
+
+	// Handle pointer-to-pointer casts
+	if ptrTarget, isTargetPtr := targetType.(*types.PointerType); isTargetPtr {
+		if _, isValPtr := val.Type().(*types.PointerType); isValPtr {
+			return block.NewBitCast(val, ptrTarget)
+		}
+	}
+
+	// Handle integer-to-integer casts
+	if intTarget, isTargetInt := targetType.(*types.IntType); isTargetInt {
+		if intVal, isValInt := val.Type().(*types.IntType); isValInt {
+			if intTarget.BitSize > intVal.BitSize {
+				return block.NewZExt(val, intTarget)
+			} else if intTarget.BitSize < intVal.BitSize {
+				return block.NewTrunc(val, intTarget)
+			}
+		}
+	}
+
+	// If we can't cast properly, log a warning and use bitcast as a last resort
+	fmt.Printf("WARNING: Attempting unusual cast from %v to %v\n", val.Type(), targetType)
+	return block.NewBitCast(val, targetType)
+}
+
+// findCommonAncestor finds the common ancestor in the class hierarchy
+func (g *CodeGenerator) findCommonAncestor(classNames []string) string {
+	if len(classNames) == 0 {
+		return ""
+	}
+	if len(classNames) == 1 {
+		return classNames[0]
+	}
+
+	// Get the ancestor chain for the first class
+	firstClass := classNames[0]
+	ancestors := []string{firstClass}
+	current := firstClass
+
+	for {
+		info, exists := g.classTable[current]
+		if !exists || info.Parent == "" {
+			break
+		}
+		ancestors = append(ancestors, info.Parent)
+		current = info.Parent
+	}
+
+	// Check each ancestor against other classes
+	for _, ancestor := range ancestors {
+		isCommonAncestor := true
+
+		for i := 1; i < len(classNames); i++ {
+			if !g.isSubclass(classNames[i], ancestor) && classNames[i] != ancestor {
+				isCommonAncestor = false
+				break
+			}
+		}
+
+		if isCommonAncestor {
+			return ancestor
+		}
+	}
+
+	// If no common ancestor found (should not happen in COOL), return Object
+	return "Object"
+}
+
 func (g *CodeGenerator) getOrCreateStringConstant(name string) *ir.Global {
-	// Replace non-alphanumeric characters with underscores
 	sanitizedName := strings.Map(func(r rune) rune {
 		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
 			return '_'
@@ -1414,15 +2104,15 @@ func (g *CodeGenerator) getOrCreateStringConstant(name string) *ir.Global {
 	}, name)
 	strConstName := fmt.Sprintf(".str.%s", sanitizedName)
 
-	// Check if it exists
 	for _, global := range g.module.Globals {
 		if global.Name() == strConstName {
 			return global
 		}
 	}
 
-	// Create new global
-	strConst := g.module.NewGlobalDef(strConstName, constant.NewCharArray(append([]byte(name), 0)))
+	// Add null terminator
+	strWithNull := name + "\x00"
+	strConst := g.module.NewGlobalDef(strConstName, constant.NewCharArray([]byte(strWithNull)))
 	return strConst
 }
 
@@ -1506,16 +2196,6 @@ func (g *CodeGenerator) isSubclass(subclass, superclass string) bool {
 	return false
 }
 
-// getMethodIndexFor looks up the vtable slot for a given method in the specified class.
-func (g *CodeGenerator) getMethodIndexFor(receiverClass, methodName string) int64 {
-	if classInfo, ok := g.classTable[receiverClass]; ok {
-		if methodInfo, ok := classInfo.Methods[methodName]; ok {
-			return int64(methodInfo.Index)
-		}
-	}
-	// Fallback to 0 if not found.
-	return 0
-}
 func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 	objectClass := &ast.Class{
 		Token:  lexer.Token{Literal: "class"},
@@ -1568,6 +2248,20 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 					},
 				},
 				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "SELF_TYPE"}, Value: "SELF_TYPE"},
+				Body:       nil,
+			},
+			&ast.Method{
+				Token:      lexer.Token{Literal: "method"},
+				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "in_string"}, Value: "in_string"},
+				Parameters: []*ast.Formal{},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "String"}, Value: "String"},
+				Body:       nil,
+			},
+			&ast.Method{
+				Token:      lexer.Token{Literal: "method"},
+				Name:       &ast.ObjectIdentifier{Token: lexer.Token{Literal: "in_int"}, Value: "in_int"},
+				Parameters: []*ast.Formal{},
+				ReturnType: &ast.TypeIdentifier{Token: lexer.Token{Literal: "Int"}, Value: "Int"},
 				Body:       nil,
 			},
 		},
@@ -1630,27 +2324,54 @@ func (g *CodeGenerator) addBuiltInClasses(program *ast.Program) {
 }
 
 func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value, attrType string, initExpr ast.Expression) (*ir.Block, error) {
+
+	// Get the destination type
+	destType := attrPtr.Type().(*types.PointerType).ElemType
+
 	if initExpr != nil {
-		// Generate initialization expression
 		val, currentBlock, err := g.generateExpression(block, initExpr)
 		if err != nil {
 			return currentBlock, err
 		}
 
-		// Get the destination type
-		destPtrType := attrPtr.Type().(*types.PointerType)
-		destType := destPtrType.ElemType
+		// Handle String type specially
+		if g.getClassNameFromType(destType) == "String" {
+			stringType := g.classTypes["String"]
 
-		// If we're initializing a String
-		if structType, ok := destType.(*types.PointerType); ok &&
-			structType.ElemType.Equal(g.classTypes["String"]) {
-			// Cast the value to the correct type if needed
+			// If we have a raw i8* pointer, wrap it in a String object
+			if val.Type().Equal(types.I8Ptr) {
+				// Create new String object
+				newString := currentBlock.NewAlloca(stringType)
+
+				// Set vtable
+				vtablePtr := currentBlock.NewGetElementPtr(stringType, newString,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				currentBlock.NewStore(
+					currentBlock.NewBitCast(g.vtables["String"], types.I8Ptr),
+					vtablePtr,
+				)
+
+				// Set value field
+				valuePtr := currentBlock.NewGetElementPtr(stringType, newString,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+				currentBlock.NewStore(val, valuePtr)
+
+				val = newString
+			}
+
+			// Cast to destination type if needed
 			if !val.Type().Equal(destType) {
 				val = currentBlock.NewBitCast(val, destType)
 			}
+
+			currentBlock.NewStore(val, attrPtr)
+			return currentBlock, nil
 		}
 
-		// Store the value
 		currentBlock.NewStore(val, attrPtr)
 		return currentBlock, nil
 	}
@@ -1659,6 +2380,7 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
 	var defaultVal value.Value
 	switch strings.ToLower(attrType) {
 	case "int":
+
 		defaultVal = constant.NewInt(types.I32, 0)
 	case "bool":
 		defaultVal = constant.NewInt(types.I1, 0)
@@ -1678,25 +2400,15 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
 		)
 
 		// Set empty string value
-		emptyStr := g.getOrCreateStringConstant("")
-		valuePtr := block.NewGetElementPtr(stringType, obj,
+		emptyStr := g.getOrCreateStringConstant("\x00")
+		strPtr := block.NewGetElementPtr(
+			types.NewArray(1, types.I8),
+			emptyStr,
 			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, 1),
+			constant.NewInt(types.I32, 0),
 		)
+		defaultVal = strPtr
 
-		var strPtr value.Value
-		if arrType, ok := emptyStr.Type().(*types.ArrayType); ok {
-			strPtr = block.NewGetElementPtr(arrType, emptyStr,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, 0),
-			)
-		} else {
-			strPtr = block.NewBitCast(emptyStr, types.NewPointer(types.I8))
-		}
-		block.NewStore(strPtr, valuePtr)
-
-		// Store pointer to the String object
-		defaultVal = block.NewBitCast(obj, types.NewPointer(types.I8))
 	default:
 		if classType, exists := g.classTypes[attrType]; exists {
 			defaultVal = constant.NewNull(types.NewPointer(classType))
@@ -1713,4 +2425,15 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
 
 	block.NewStore(defaultVal, attrPtr)
 	return block, nil
+}
+
+func (g *CodeGenerator) getOrCreateMalloc() *ir.Func {
+	// Look for existing malloc function
+	for _, f := range g.module.Funcs {
+		if f.Name() == "malloc" {
+			return f
+		}
+	}
+	// Create new malloc function if not found
+	return g.module.NewFunc("malloc", types.I8Ptr, ir.NewParam("size", types.I64))
 }

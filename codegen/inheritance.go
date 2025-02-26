@@ -87,6 +87,13 @@ func (g *CodeGenerator) BuildClassTable(classes []*ast.Class) error {
 					Offset: attr.Offset,
 				})
 			}
+			for name, method := range parentInfo.Methods {
+				if name == "copy" {
+					// Rename the inherited copy method to current class's name
+					method.Name = fmt.Sprintf("%s_copy", info.Name)
+				}
+				info.Methods[name] = method
+			}
 
 			// Copy parent's methods
 			for name, method := range parentInfo.Methods {
@@ -101,17 +108,16 @@ func (g *CodeGenerator) BuildClassTable(classes []*ast.Class) error {
 		for _, feature := range class.Features {
 			switch f := feature.(type) {
 			case *ast.Attribute:
-				// Verify no redefinition
 				for _, attr := range info.Attributes {
 					if attr.Name == f.Name.Value {
 						return fmt.Errorf("attribute %s redefined in class %s", f.Name.Value, class.Name.Value)
 					}
 				}
-				// Add local attribute
+				// Add local attribute without setting Offset here
 				info.Attributes = append(info.Attributes, AttributeInfo{
 					Name:   f.Name.Value,
 					Type:   f.Type.Value,
-					Offset: offset + 1, // +1 for vtable pointer
+					Offset: 0, // Corrected: Offset will be set in ComputeObjectLayouts
 				})
 				offset++
 
@@ -171,16 +177,151 @@ func sortClassesByInheritance(classes []*ast.Class, table ClassTable) []*ast.Cla
 }
 
 func (g *CodeGenerator) ComputeObjectLayouts() error {
-	// Iterate over each class in the class table.
-	for _, classInfo := range g.classTable {
-		// Start with offset 1 since offset 0 is reserved for the vtable pointer.
-		offset := 1
-		for i := range classInfo.Attributes {
-			classInfo.Attributes[i].Offset = offset
-			offset++
+	fmt.Println("\n=== Debug: Computing Object Layouts ===")
+	sortedClasses := sortClassesByInheritanceFromTable(g.classTable)
+
+	fmt.Printf("\nProcessing classes in order: %v\n", sortedClasses)
+
+	for _, className := range sortedClasses {
+        classInfo := g.classTable[className]
+
+        if classInfo.Parent != "" {
+            parentInfo := g.classTable[classInfo.Parent]
+
+            // Correctly inherit parent's attributes and offsets
+            classInfo.Attributes = make([]AttributeInfo, len(parentInfo.Attributes))
+            copy(classInfo.Attributes, parentInfo.Attributes)
+
+            nextOffset := 1 // Default if parent has no attributes
+            if len(parentInfo.Attributes) > 0 {
+                nextOffset = parentInfo.Attributes[len(parentInfo.Attributes)-1].Offset + 1
+            }
+
+            // Process local attributes
+            for _, class := range g.program.Classes {
+                if class.Name.Value == className {
+                    for _, feature := range class.Features {
+                        if attr, ok := feature.(*ast.Attribute); ok {
+                            isInherited := false
+                            // Check all inherited attributes (from all ancestors)
+                            currentClass := className
+                            for currentClass != "" {
+                                ancestorInfo := g.classTable[currentClass]
+                                for _, a := range ancestorInfo.Attributes {
+                                    if a.Name == attr.Name.Value {
+                                        isInherited = true
+                                        break
+                                    }
+                                }
+                                if isInherited {
+                                    break
+                                }
+                                currentClass = ancestorInfo.Parent
+                            }
+
+                            if !isInherited {
+                                classInfo.Attributes = append(classInfo.Attributes, AttributeInfo{
+                                    Name:   attr.Name.Value,
+                                    Type:   attr.Type.Value,
+                                    Offset: nextOffset,
+                                })
+                                nextOffset++
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update object size
+            classInfo.ObjectSize = nextOffset
+        } else {
+			fmt.Printf("Base class - assigning sequential offsets:\n")
+			offset := 1 // vtable at 0
+			newAttributes := make([]AttributeInfo, 0)
+
+			// Find the AST class to get initialization values
+			var classAST *ast.Class
+			for _, class := range g.program.Classes {
+				if class.Name.Value == className {
+					classAST = class
+					break
+				}
+			}
+
+			for _, attr := range classInfo.Attributes {
+				// Find initialization value if present
+				var initValue string = "default"
+				if classAST != nil {
+					for _, feature := range classAST.Features {
+						if attrFeature, ok := feature.(*ast.Attribute); ok {
+							if attrFeature.Name.Value == attr.Name {
+								if attrFeature.Init != nil {
+									switch init := attrFeature.Init.(type) {
+									case *ast.StringLiteral:
+										initValue = fmt.Sprintf("\"%s\"", init.Value)
+									case *ast.IntegerLiteral:
+										initValue = fmt.Sprintf("%d", init.Value)
+									case *ast.BooleanLiteral:
+										initValue = fmt.Sprintf("%v", init.Value)
+									default:
+										initValue = fmt.Sprintf("complex expression: %T", init)
+									}
+								}
+								break
+							}
+						}
+					}
+				}
+
+				fmt.Printf("  - Setting %s (type: %s) at offset %d with initial value: %s\n",
+					attr.Name, attr.Type, offset, initValue)
+				attr.Offset = offset
+				newAttributes = append(newAttributes, attr)
+				offset++
+			}
+			classInfo.Attributes = newAttributes
 		}
-		// Set the computed object size.
-		classInfo.ObjectSize = offset
+
+		// Update object size
+		if len(classInfo.Attributes) > 0 {
+			classInfo.ObjectSize = classInfo.Attributes[len(classInfo.Attributes)-1].Offset + 1
+		} else {
+			classInfo.ObjectSize = 1
+		}
+
+		fmt.Printf("\nFinal layout for %s:\n", className)
+		fmt.Printf("Object size: %d\n", classInfo.ObjectSize)
+		fmt.Printf("Attributes:\n")
+		for _, attr := range classInfo.Attributes {
+			// Find initialization value in AST
+			initValue := "default"
+			for _, class := range g.program.Classes {
+				if class.Name.Value == className {
+					for _, feature := range class.Features {
+						if attrFeature, ok := feature.(*ast.Attribute); ok {
+							if attrFeature.Name.Value == attr.Name {
+								if attrFeature.Init != nil {
+									switch init := attrFeature.Init.(type) {
+									case *ast.StringLiteral:
+										initValue = fmt.Sprintf("\"%s\"", init.Value)
+									case *ast.IntegerLiteral:
+										initValue = fmt.Sprintf("%d", init.Value)
+									case *ast.BooleanLiteral:
+										initValue = fmt.Sprintf("%v", init.Value)
+									default:
+										initValue = fmt.Sprintf("complex expression: %T", init)
+									}
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+			fmt.Printf("  - %s (type: %s) at offset %d with initial value: %s\n",
+				attr.Name, attr.Type, attr.Offset, initValue)
+		}
+		fmt.Printf("----------------------------------------\n")
 	}
 	return nil
 }
@@ -195,6 +336,7 @@ func (g *CodeGenerator) ConstructVTables() error {
 		info := g.classTable[className]
 		fmt.Printf("\nProcessing vtable for class: %s\n", className)
 		fmt.Printf("Parent class: %s\n", info.Parent)
+        classNameConst := g.getOrCreateStringConstant(info.Name)
 
 		// Collect all methods including inherited ones in correct order
 		methodMap := make(map[string]MethodInfo)
@@ -258,7 +400,6 @@ func (g *CodeGenerator) ConstructVTables() error {
 		}
 
 		// Get class name and parent name constants
-		classNameConst := g.getOrCreateStringConstant(info.Name)
 		var parentVtable constant.Constant
 		if info.Parent == "" {
 			parentVtable = constant.NewNull(types.NewPointer(types.I8))
@@ -296,7 +437,7 @@ func (g *CodeGenerator) ConstructVTables() error {
 		// Create vtable initializer
 		vtableInit := constant.NewStruct(vtableType,
 			constant.NewBitCast(classNameConst, types.NewPointer(types.I8)),
-			parentVtable,
+			constant.NewBitCast(parentVtable, types.NewPointer(types.I8)), // Fixed parent link
 			constant.NewArray(vtableArrayType, methodList...),
 		)
 
