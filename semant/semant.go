@@ -398,56 +398,149 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 	
 		// Analyze the body of the let expression
 		sa.analyzeExpression(e.Body, className)
-	case *ast.MethodCall:
-		// Analyze the object if it exists
-		if e.Object != nil {
-			// Analyze the object expression
-			sa.analyzeExpression(e.Object, className)
-			
-			// Check for null dispatch
-			if _, isVoid := e.Object.(*ast.IsVoidExpression); isVoid {
-				sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: dispatch on void",
-					e.Method.Token.Line, e.Method.Token.Column))
-				return
-			}
-			
-			// Get the object type
-			objectType := sa.symbolTable.GetExpressionType(e.Object, className)
-			fmt.Printf("DEBUG: Method call on object of type: %s\n", objectType)
-			
-			// Check if method exists on that type
-			if _, exists := sa.symbolTable.LookupMethod(objectType, e.Method.Value); !exists {
-				sa.errors = append(sa.errors,
-					fmt.Sprintf("line %d:%d: undefined method '%s' called on object of type '%s'",
-						e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, objectType))
-			}
-		} else {
-			// This is a direct method call (implicit self)
-			if _, exists := sa.symbolTable.LookupMethod(className, e.Method.Value); !exists {
-				sa.errors = append(sa.errors,
-					fmt.Sprintf("line %d:%d: undefined method '%s' called in class '%s'",
-						e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, className))
-			}
-		}
-		
-		// Analyze method arguments
-		for _, arg := range e.Arguments {
-			sa.analyzeExpression(arg, className)
-		}
-		
-		// Verify argument types match parameter types
-		if e.Object == nil {
-			// For direct calls
-			if method, exists := sa.symbolTable.LookupMethod(className, e.Method.Value); exists {
-				sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
-			}
-		} else {
-			// For object calls
-			objectType := sa.symbolTable.GetExpressionType(e.Object, className)
-			if method, exists := sa.symbolTable.LookupMethod(objectType, e.Method.Value); exists {
-				sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
-			}
-		}
+	// This is the fixed method call case for the analyzeExpression function in semant.go
+case *ast.MethodCall:
+    // First, analyze all arguments regardless of whether the method exists
+    for _, arg := range e.Arguments {
+        sa.analyzeExpression(arg, className)
+    }
+    
+    // Track whether we found the method to avoid duplicate errors
+    methodFound := false
+    
+    if e.Object != nil {
+        // This is a dispatched call (obj.method())
+        sa.analyzeExpression(e.Object, className)
+        
+        // Check for null dispatch
+        if _, isVoid := e.Object.(*ast.IsVoidExpression); isVoid {
+            sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: dispatch on void",
+                e.Method.Token.Line, e.Method.Token.Column))
+            return
+        }
+        
+        // Get the object type for the dispatch
+        objectType := sa.symbolTable.GetExpressionType(e.Object, className)
+        fmt.Printf("DEBUG: Method call on object of type: %s\n", objectType)
+        
+        // For static dispatch (@Type)
+        if e.Type != nil {
+            // Check if the type exists
+            if !sa.symbolTable.isValidType(e.Type.Value) {
+                sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: undefined type '%s' in static dispatch",
+                    e.Type.Token.Line, e.Type.Token.Column, e.Type.Value))
+            } else {
+                // Verify object conforms to static type
+                if !sa.symbolTable.IsConformingType(objectType, e.Type.Value, className) {
+                    sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: expression type '%s' does not conform to declared static dispatch type '%s'",
+                        e.Type.Token.Line, e.Type.Token.Column, objectType, e.Type.Value))
+                }
+                
+                // Use the static type for method lookup
+                method, exists := sa.symbolTable.LookupMethod(e.Type.Value, e.Method.Value)
+                if exists {
+                    methodFound = true
+                    sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
+                }
+            }
+        } else {
+            // Regular dynamic dispatch
+            method, exists := sa.symbolTable.LookupMethod(objectType, e.Method.Value)
+            if exists {
+                methodFound = true
+                sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
+            }
+        }
+        
+        // Report undefined method
+        if !methodFound {
+            dispatchType := objectType
+            if e.Type != nil {
+                dispatchType = e.Type.Value
+            }
+            sa.errors = append(sa.errors,
+                fmt.Sprintf("line %d:%d: undefined method '%s' called on object of type '%s'",
+                    e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, dispatchType))
+        }
+    } else {
+        // This is a direct method call (implicit self)
+        method, exists := sa.symbolTable.LookupMethod(className, e.Method.Value)
+        if exists {
+            methodFound = true
+            sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
+        } else {
+            // Check if it's defined in any built-in class
+            for _, builtInClass := range []string{"Object", "String", "Int", "Bool"} {
+                if method, exists := sa.symbolTable.LookupMethod(builtInClass, e.Method.Value); exists {
+                    // Methods from built-in classes should be directly callable in certain cases (like IO methods)
+                    if builtInClass == "IO" && sa.symbolTable.IsConformingType(className, "IO", className) {
+                        methodFound = true
+                        sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
+                        break
+                    }
+                }
+            }
+            
+            // Check the inheritance chain one last time for clarity
+            current := className
+            for current != "" && !methodFound {
+                if classSymbol, exists := sa.symbolTable.Classes[current]; exists {
+                    for featureName, feature := range classSymbol.Features {
+                        if featureName == e.Method.Value && feature.Kind == SymbolMethod {
+                            methodFound = true
+                            break
+                        }
+                    }
+                    current = classSymbol.Parent
+                } else {
+                    break
+                }
+            }
+        }
+        
+        // Report undefined method
+        if !methodFound {
+            sa.errors = append(sa.errors,
+                fmt.Sprintf("line %d:%d: undefined method '%s' called in class '%s'",
+                    e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, className))
+        }
+    }
+	// Add this case to the switch statement in analyzeExpression
+case *ast.FunctionCall:
+    fmt.Printf("DEBUG: Analyzing function call to method: %s\n", e.Function.Value)
+    
+    // Analyze all arguments
+    for _, arg := range e.Arguments {
+        sa.analyzeExpression(arg, className)
+    }
+    
+    // Check if the method exists in the current class or any ancestor
+    methodFound := false
+    
+    // First check in the current class
+    if method, exists := sa.symbolTable.LookupMethod(className, e.Function.Value); exists {
+        methodFound = true
+        // Validate argument types
+        sa.validateMethodArguments(method, e.Arguments, className, e.Function.Token)
+    }
+    
+    // If not found, and it might be an IO method, check if the class inherits from IO
+    if !methodFound && (e.Function.Value == "out_string" || e.Function.Value == "out_int" || 
+                        e.Function.Value == "in_string" || e.Function.Value == "in_int") {
+        if sa.symbolTable.IsConformingType(className, "IO", className) {
+            if method, exists := sa.symbolTable.LookupMethod("IO", e.Function.Value); exists {
+                methodFound = true
+                sa.validateMethodArguments(method, e.Arguments, className, e.Function.Token)
+            }
+        }
+    }
+    
+    // If still not found, report the error
+    if !methodFound {
+        sa.errors = append(sa.errors, 
+            fmt.Sprintf("line %d:%d: undefined method '%s' called in class '%s'",
+                e.Function.Token.Line, e.Function.Token.Column, e.Function.Value, className))
+    }
 	}
 	
 }

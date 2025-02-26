@@ -1,3 +1,4 @@
+
 class Animal {
     name : String <- "Unknown";
 
@@ -51,7 +52,7 @@ class Point {
   getY() : Int { y };
 };
 
-class Main inherits IO{
+class Main {
     a : Dog;
     b : Int;
     c : String;
@@ -59,54 +60,15 @@ class Main inherits IO{
     d : Animal;
     main() : Object {
         {
-            if isvoid a then {
-                        (new IO).out_string("is void");
-                    } else {
-                        (new IO).out_string(" is a ");
-                    }fi;
-
             let myDog : Dog <- (new Dog).init("Buddy") in {
-                out_string("Enter a name: ");
+                (new IO).out_string("zerzerz");
                 myDog.setName("test");
+                (new IO).out_string("\n");
                 let dog2 : Dog <- myDog.copy() in {
                     (new IO).out_string(dog2.getName());
                 };
-                let num : Int <- 10 in {
-                    (new IO).out_string("\n");
-                    (new IO).out_int(num);
-                    let num2 : Int <- num.copy() in {
-                        (new IO).out_int(num2);
-                        (new IO).out_string("\n");
-                    };
-                };
-                    
-                    
-                    (new IO).out_string(myDog.getName());
-                    (new IO).out_string(" is a ");
-
-                    (new IO).out_string(myDog.getBreed());
-                    (new IO).out_string(".\n");
+    
             };
-           
-           -- a <- (new Dog).init("Buddy");
-           --b <- 10;
-           e <- true;
-            d <- (new Animal).init("Buddy");
-            case e of
-                x : Dog => (new IO).out_string("Dog\n");
-               y : Bool => (new IO).out_string("Int\n");
-                a : Animal => (new IO).out_string("Bool\n");
-                z : Object => (new IO).out_string("String\n");
-            esac;
-            (*
-            (new IO).out_string("Enter a string: ");
-            let input : String <- (new IO).in_string() in {
-                (new IO).out_string("You entered: ");
-                (new IO).out_string(input);
-                (new IO).out_string("\n");
-            };*)
-           
-            (new IO).out_string("Hello World\n");
         }
     };
 };

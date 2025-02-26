@@ -833,6 +833,60 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			}
 
 			return method.ReturnType
+		case *ast.FunctionCall:
+			fmt.Printf("\nDEBUG: Getting type for function call to %s\n", e.Function.Value)
+			
+			// Try to find the method in the current class or its ancestors
+			method, exists := st.LookupMethod(currentClass, e.Function.Value)
+			if !exists {
+				fmt.Printf("DEBUG: Method %s not found in class %s\n", e.Function.Value, currentClass)
+				
+				// Look specifically in IO class for common methods
+				if e.Function.Value == "out_string" || e.Function.Value == "out_int" || 
+				   e.Function.Value == "in_string" || e.Function.Value == "in_int" {
+					if method, exists := st.LookupMethod("IO", e.Function.Value); exists {
+						if method.ReturnType == "SELF_TYPE" {
+							return currentClass
+						}
+						return method.ReturnType
+					}
+				}
+				
+				st.Errors = append(st.Errors, 
+					fmt.Sprintf("undefined method '%s' called in class %s", 
+						e.Function.Value, currentClass))
+				return "Object" // Default return type for error
+			}
+			
+			fmt.Printf("DEBUG: Found method %s with return type %s\n", 
+				e.Function.Value, method.ReturnType)
+			
+			// Check if the method exists but argument count doesn't match
+			if len(e.Arguments) != len(method.Parameters) {
+				st.Errors = append(st.Errors, 
+					fmt.Sprintf("wrong number of arguments for method %s: expected %d, got %d", 
+						e.Function.Value, len(method.Parameters), len(e.Arguments)))
+			}
+			
+			// Check argument types
+			for i, arg := range e.Arguments {
+				if i < len(method.Parameters) {
+					argType := st.GetExpressionType(arg, currentClass)
+					paramType := method.Parameters[i].Type.Value
+					
+					if !st.IsConformingType(argType, paramType, currentClass) {
+						st.Errors = append(st.Errors, 
+							fmt.Sprintf("argument #%d type %s does not conform to parameter type %s", 
+								i+1, argType, paramType))
+					}
+				}
+			}
+			
+			// If method returns SELF_TYPE, it's the current class
+			if method.ReturnType == "SELF_TYPE" {
+				return currentClass
+			}
+			return method.ReturnType
 		case *ast.Assignment:
 			fmt.Printf("DEBUG: Processing assignment to %s\n", e.Name.Value)
 			
