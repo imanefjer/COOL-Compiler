@@ -1859,6 +1859,15 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 			if err != nil {
 				return nil, block, err
 			}
+			if e.Type != nil {
+				receiverType = e.Type.Value
+				// Cast receiver to static type's class
+				if classType, exists := g.classTypes[receiverType]; exists {
+					receiverObj = block.NewBitCast(receiverObj, types.NewPointer(classType))
+				} else {
+					return nil, block, fmt.Errorf("static type %s not found", receiverType)
+				}
+			}
 
 			// Determine receiver type based on expression
 			switch expr := e.Object.(type) {
@@ -1887,6 +1896,7 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 				return nil, block, fmt.Errorf("unsupported receiver expression: %T", e.Object)
 			}
 		}
+
 
 		// Special handling for type_name method on primitive types
 		if e.Method.Value == "type_name" {
@@ -2021,17 +2031,6 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 
 	case *ast.FunctionCall:
 		// Generate argument expressions
-		if e.Function.Value == "out_string" && g.currentClass == "IO" {
-			// Implicit receiver: use self.
-			methodCall := &ast.MethodCall{
-				Token:     e.Token,
-				Object:    &ast.ObjectIdentifier{Token: lexer.Token{Literal: "self"}, Value: "self"},
-				Method:    e.Function,
-				Arguments: e.Arguments,
-			}
-			// Now process as a MethodCall.
-			return g.generateExpression(block, methodCall)
-		}
 		args := make([]value.Value, 0, len(e.Arguments))
 		currentBlock := block
 

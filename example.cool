@@ -20,6 +20,9 @@ class Animal {
     getName() : String {
         name
     };
+    print() : Object {
+        (new IO).out_string("zerzer,name ")
+    };
 };
 
 class Dog inherits Animal {
@@ -34,6 +37,9 @@ class Dog inherits Animal {
 
     getBreed() : String {
         breed
+    };
+    print() : Object {
+        (new IO).out_string("zerzer,kifach ")
     };
 };
 class Point {
@@ -67,7 +73,7 @@ class Main {
                 let dog2 : Dog <- myDog.copy() in {
                     (new IO).out_string(dog2.getName());
                 };
-    
+                myDog@Animal.print();
             };
         }
     };
