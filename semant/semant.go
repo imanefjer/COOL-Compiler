@@ -2,6 +2,7 @@ package semant
 
 import (
 	"cool-compiler/ast"
+	"cool-compiler/lexer"
 	"fmt"
 )
 
@@ -121,29 +122,79 @@ func (sa *SemanticAnalyzer) setupInheritance(class *ast.Class) error {
 
 	return nil
 }
-
 func (sa *SemanticAnalyzer) analyzeClass(class *ast.Class) {
-	className := class.Name.Value
+    className := class.Name.Value
 
-	// Analyze each feature
-	for _, feature := range class.Features {
-		switch f := feature.(type) {
-		case *ast.Method:
-			if err := sa.symbolTable.AddMethod(className, f); err != nil {
-				sa.errors = append(sa.errors, err.Error())
-			}
-			// Analyze method body
-			sa.analyzeExpression(f.Body, className)
-		case *ast.Attribute:
-			if err := sa.symbolTable.AddAttribute(className, f); err != nil {
-				sa.errors = append(sa.errors, err.Error())
-			}
-			// Analyze attribute initialization if present
-			if f.Init != nil {
-				sa.analyzeExpression(f.Init, className)
-			}
-		}
-	}
+    // First pass: register all methods and attributes
+    for _, feature := range class.Features {
+        switch f := feature.(type) {
+        case *ast.Method:
+            if err := sa.symbolTable.AddMethod(className, f); err != nil {
+                sa.errors = append(sa.errors, err.Error())
+            }
+        case *ast.Attribute:
+            if err := sa.symbolTable.AddAttribute(className, f); err != nil {
+                sa.errors = append(sa.errors, err.Error())
+            }
+        }
+    }
+
+    // Second pass: analyze method bodies and attribute initializers
+    for _, feature := range class.Features {
+        switch f := feature.(type) {
+        case *ast.Method:
+            // Create a new scope for the method
+            sa.symbolTable.EnterScope(SymbolMethod, className)
+            
+            // Add parameters to scope
+            for _, param := range f.Parameters {
+                // Check for duplicate parameters
+                if _, exists := sa.symbolTable.CurrentScope.Symbols[param.Name.Value]; exists {
+                    sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: duplicate parameter name '%s' in method '%s'",
+                        param.Name.Token.Line, param.Name.Token.Column, param.Name.Value, f.Name.Value))
+                    continue
+                }
+                
+                // Check for 'self' as parameter name
+                if param.Name.Value == "self" {
+                    sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: 'self' cannot be used as a parameter name",
+                        param.Name.Token.Line, param.Name.Token.Column))
+                    continue
+                }
+                
+                // Add parameter to scope
+                sa.symbolTable.CurrentScope.Symbols[param.Name.Value] = &Symbol{
+                    Name:  param.Name.Value,
+                    Kind:  SymbolLocal,
+                    Type:  param.Type.Value,
+                    Token: param.Name.Token,
+                }
+                fmt.Printf("DEBUG: Added parameter '%s' with type '%s' to method '%s'\n", 
+                    param.Name.Value, param.Type.Value, f.Name.Value)
+            }
+            
+            // Analyze method body
+            sa.analyzeExpression(f.Body, className)
+            
+            // Ensure the body's type conforms to the return type
+            bodyType := sa.symbolTable.GetExpressionType(f.Body, className)
+            returnType := f.ReturnType.Value
+            
+            if !sa.symbolTable.IsConformingType(bodyType, returnType, className) {
+                sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: method body type '%s' does not conform to declared return type '%s'",
+                    f.Token.Line, f.Token.Column, bodyType, returnType))
+            }
+            
+            // Exit method scope
+            sa.symbolTable.ExitScope()
+            
+        case *ast.Attribute:
+            // Analyze attribute initialization if present
+            if f.Init != nil {
+                sa.analyzeExpression(f.Init, className)
+            }
+        }
+    }
 }
 
 func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className string) {
@@ -152,6 +203,53 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 	}
 
 	switch e := expr.(type) {
+	case *ast.Assignment:
+		// Analyze the right-hand side expression
+		sa.analyzeExpression(e.Expression, className)
+		
+		// Check if variable being assigned to exists
+		if e.Name.Value != "self" { // Cannot assign to self
+			if _, exists := sa.symbolTable.LookupSymbol(e.Name.Value); !exists {
+				// Also check if it's a class attribute
+				if _, exists := sa.symbolTable.LookupAttribute(className, e.Name.Value); !exists {
+					// Truly undefined
+					sa.errors = append(sa.errors, 
+						fmt.Sprintf("line %d:%d: assignment to undefined variable '%s'", 
+						e.Name.Token.Line, e.Name.Token.Column, e.Name.Value))
+				}
+			}
+		} else {
+			// Cannot assign to self
+			sa.errors = append(sa.errors, 
+				fmt.Sprintf("line %d:%d: cannot assign to 'self'", 
+				e.Name.Token.Line, e.Name.Token.Column))
+		}
+		
+		// Type check the assignment
+		exprType := sa.symbolTable.GetExpressionType(e.Expression, className)
+		targetType := sa.symbolTable.GetExpressionType(e.Name, className)
+		
+		if !sa.symbolTable.IsConformingType(exprType, targetType, className) {
+			sa.errors = append(sa.errors, 
+				fmt.Sprintf("line %d:%d: type %s of assigned expression does not conform to declared type %s of identifier %s", 
+				e.Token.Line, e.Token.Column, exprType, targetType, e.Name.Value))
+		}
+	case *ast.ObjectIdentifier:
+		// Skip "self" keyword
+		if e.Value == "self" {
+			return
+		}
+		
+		// Check if the identifier is defined in any scope
+		if _, exists := sa.symbolTable.LookupSymbol(e.Value); !exists {
+			// Also check if it's a class attribute
+			if _, exists := sa.symbolTable.LookupAttribute(className, e.Value); !exists {
+				// Identifier is truly undefined
+				sa.errors = append(sa.errors, 
+					fmt.Sprintf("line %d:%d: undefined variable '%s'", 
+					e.Token.Line, e.Token.Column, e.Value))
+			}
+		}
 	case *ast.BinaryExpression:
 		sa.analyzeExpression(e.Left, className)
 		sa.analyzeExpression(e.Right, className)
@@ -258,64 +356,122 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 		allBindings = append(allBindings, e.Bindings...)
 	
 		for _, binding := range allBindings {
+			// Validate binding name is not 'self'
+			if binding.Name.Value == "self" {
+				sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: 'self' cannot be bound in a let expression",
+					binding.Name.Token.Line, binding.Name.Token.Column))
+				continue
+			}
+	
 			// Validate declared type
 			if !sa.symbolTable.isValidType(binding.Type.Value) {
-				sa.errors = append(sa.errors, fmt.Sprintf("line %d: undefined type %s in let binding",
-					binding.Name.Token.Line, binding.Type.Value))
+				sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: undefined type '%s' in let binding",
+					binding.Type.Token.Line, binding.Type.Token.Column, binding.Type.Value))
 				continue
 			}
 	
 			// Analyze initializer if present
 			if binding.Init != nil {
+				// Check for undefined variables in the initializer
 				sa.analyzeExpression(binding.Init, className)
+				
 				initType := sa.symbolTable.GetExpressionType(binding.Init, className)
-				if !sa.symbolTable.IsConformingType(initType, binding.Type.Value, className) {
-					sa.errors = append(sa.errors, fmt.Sprintf("line %d: let initializer type %s does not conform to declared type %s",
-						binding.Name.Token.Line, initType, binding.Type.Value))
+				declaredType := binding.Type.Value
+				
+				if !sa.symbolTable.IsConformingType(initType, declaredType, className) {
+					sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: let initializer type '%s' does not conform to declared type '%s'",
+						binding.Type.Token.Line, binding.Type.Token.Column, initType, declaredType))
 				}
 			}
 	
-			// Add binding to scope
+			// Add binding to scope - even if there are errors, to prevent cascading errors
 			sa.symbolTable.CurrentScope.Symbols[binding.Name.Value] = &Symbol{
-				Name: binding.Name.Value,
-				Kind: SymbolLocal,
-				Type: binding.Type.Value,
+				Name:  binding.Name.Value,
+				Kind:  SymbolLocal,
+				Type:  binding.Type.Value,
+				Token: binding.Name.Token,
 			}
+			
+			fmt.Printf("DEBUG: Added let binding '%s' with type '%s' to scope\n", 
+				binding.Name.Value, binding.Type.Value)
 		}
 	
+		// Analyze the body of the let expression
 		sa.analyzeExpression(e.Body, className)
 	case *ast.MethodCall:
-		// dispatching on an IsVoid expression
-		if _, isVoid := e.Object.(*ast.IsVoidExpression); isVoid {
-			sa.errors = append(sa.errors, "dispatch on void")
-			return
-		}
-
-		// Check if method exists in current class or parent classes
-		if e.Object == nil {
-			// This is a direct method call 
-			if _, exists := sa.symbolTable.LookupMethod(className, e.Method.Value); !exists {
-				sa.errors = append(sa.errors,
-					fmt.Sprintf("line %d:%d: undefined method '%s' called in class %s",
-						e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, className))
+		// Analyze the object if it exists
+		if e.Object != nil {
+			// Analyze the object expression
+			sa.analyzeExpression(e.Object, className)
+			
+			// Check for null dispatch
+			if _, isVoid := e.Object.(*ast.IsVoidExpression); isVoid {
+				sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: dispatch on void",
+					e.Method.Token.Line, e.Method.Token.Column))
+				return
 			}
-		} else {
-			// This is an object method call 
+			
+			// Get the object type
 			objectType := sa.symbolTable.GetExpressionType(e.Object, className)
+			fmt.Printf("DEBUG: Method call on object of type: %s\n", objectType)
+			
+			// Check if method exists on that type
 			if _, exists := sa.symbolTable.LookupMethod(objectType, e.Method.Value); !exists {
 				sa.errors = append(sa.errors,
-					fmt.Sprintf("line %d:%d: undefined method '%s' called on object of type %s",
+					fmt.Sprintf("line %d:%d: undefined method '%s' called on object of type '%s'",
 						e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, objectType))
 			}
+		} else {
+			// This is a direct method call (implicit self)
+			if _, exists := sa.symbolTable.LookupMethod(className, e.Method.Value); !exists {
+				sa.errors = append(sa.errors,
+					fmt.Sprintf("line %d:%d: undefined method '%s' called in class '%s'",
+						e.Method.Token.Line, e.Method.Token.Column, e.Method.Value, className))
+			}
 		}
+		
 		// Analyze method arguments
 		for _, arg := range e.Arguments {
 			sa.analyzeExpression(arg, className)
 		}
+		
+		// Verify argument types match parameter types
+		if e.Object == nil {
+			// For direct calls
+			if method, exists := sa.symbolTable.LookupMethod(className, e.Method.Value); exists {
+				sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
+			}
+		} else {
+			// For object calls
+			objectType := sa.symbolTable.GetExpressionType(e.Object, className)
+			if method, exists := sa.symbolTable.LookupMethod(objectType, e.Method.Value); exists {
+				sa.validateMethodArguments(method, e.Arguments, className, e.Method.Token)
+			}
+		}
 	}
-	// Add other expression types as needed
+	
 }
-
+func (sa *SemanticAnalyzer) validateMethodArguments(method *Symbol, args []ast.Expression, 
+    className string, token lexer.Token) {
+    
+    // Check arity
+    if len(args) != len(method.Parameters) {
+        sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: wrong number of arguments for method '%s': expected %d, got %d",
+            token.Line, token.Column, method.Name, len(method.Parameters), len(args)))
+        return
+    }
+    
+    // Check argument types
+    for i, arg := range args {
+        argType := sa.symbolTable.GetExpressionType(arg, className)
+        paramType := method.Parameters[i].Type.Value
+        
+        if !sa.symbolTable.IsConformingType(argType, paramType, className) {
+            sa.errors = append(sa.errors, fmt.Sprintf("line %d:%d: argument #%d type '%s' does not conform to parameter type '%s'",
+                token.Line, token.Column, i+1, argType, paramType))
+        }
+    }
+}
 func (sa *SemanticAnalyzer) validateMainClass(program *ast.Program) {
 	fmt.Println("\n=== Validating Main Class ===")
 

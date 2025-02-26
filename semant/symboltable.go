@@ -356,17 +356,54 @@ func (g *InheritanceGraph) ValidateInheritance() []string {
 
 // LookupSymbol searches for a symbol in current and parent scopes
 func (st *SymbolTable) LookupSymbol(name string) (*Symbol, bool) {
-	fmt.Printf("\n=== Looking up symbol: %s ===\n", name)
-	// Start from current scope and work up
-	for scope := st.CurrentScope; scope != nil; scope = scope.Parent {
-		fmt.Printf("DEBUG: Checking scope kind: %v for symbol %s\n", scope.Kind, name)
-		if symbol, exists := scope.Symbols[name]; exists {
-			fmt.Printf("DEBUG: Found symbol %s with type %s\n", name, symbol.Type)
-			return symbol, true
-		}
-	}
-	fmt.Printf("DEBUG: Symbol %s not found in any scope\n", name)
-	return nil, false
+    fmt.Printf("\n=== Looking up symbol: %s ===\n", name)
+    
+    // Special case for 'self'
+    if name == "self" {
+        // Create a temporary symbol for 'self'
+        selfSymbol := &Symbol{
+            Name: "self",
+            Kind: SymbolLocal,
+            Type: "SELF_TYPE",
+        }
+        return selfSymbol, true
+    }
+    
+    // Start from current scope and work up
+    for scope := st.CurrentScope; scope != nil; scope = scope.Parent {
+        scopeType := "unknown"
+        switch scope.Kind {
+        case SymbolClass:
+            scopeType = "class"
+        case SymbolMethod:
+            scopeType = "method"
+        case SymbolLocal:
+            scopeType = "local block"
+        }
+        
+        fmt.Printf("DEBUG: Checking %s scope for symbol %s\n", scopeType, name)
+        
+        if symbol, exists := scope.Symbols[name]; exists {
+            fmt.Printf("DEBUG: Found symbol %s with type %s in %s scope\n", 
+                name, symbol.Type, scopeType)
+            return symbol, true
+        }
+    }
+    
+    // If not found in any scope, check if it's a class attribute
+    if st.CurrentScope != nil && st.CurrentScope.Class != "" {
+        currentClass := st.CurrentScope.Class
+        fmt.Printf("DEBUG: Checking for %s as attribute in class %s\n", name, currentClass)
+        
+        if attr, exists := st.LookupAttribute(currentClass, name); exists {
+            fmt.Printf("DEBUG: Found attribute %s with type %s in class %s\n", 
+                name, attr.Type, currentClass)
+            return attr, true
+        }
+    }
+    
+    fmt.Printf("DEBUG: Symbol %s not found in any scope\n", name)
+    return nil, false
 }
 
 // lookupInherited searches for a symbol in parent classes
@@ -504,53 +541,79 @@ func (st *SymbolTable) GetClassFeatures(className string) map[string]*Symbol {
 
 	return features
 }
-
 // AddMethod adds and validates a method in the current class
 func (st *SymbolTable) AddMethod(className string, method *ast.Method) error {
-	fmt.Printf("\n=== Adding method %s to class %s ===\n", method.Name.Value, className)
+    fmt.Printf("\n=== Adding method %s to class %s ===\n", method.Name.Value, className)
 
-	// Get the class symbol
-	classSymbol, exists := st.Classes[className]
-	if !exists {
-		return fmt.Errorf("internal error: class %s not found", className)
-	}
+    // Get the class symbol
+    classSymbol, exists := st.Classes[className]
+    if !exists {
+        return fmt.Errorf("internal error: class %s not found", className)
+    }
 
-	// Create method symbol
-	methodSym := &Symbol{
-		Name:       method.Name.Value,
-		Kind:       SymbolMethod,
-		ReturnType: method.ReturnType.Value,
-		Parameters: method.Parameters,
-		Token:      method.Token,
-	}
+    // Check for duplicate parameter names
+    paramNames := make(map[string]bool)
+    for _, param := range method.Parameters {
+        if param.Name.Value == "self" {
+            return fmt.Errorf("line %d:%d: 'self' cannot be used as a parameter name", 
+                param.Name.Token.Line, param.Name.Token.Column)
+        }
+        
+        if paramNames[param.Name.Value] {
+            return fmt.Errorf("line %d:%d: duplicate parameter name '%s' in method '%s'",
+                param.Name.Token.Line, param.Name.Token.Column, param.Name.Value, method.Name.Value)
+        }
+        paramNames[param.Name.Value] = true
+        
+        // Validate parameter type exists
+        if !st.isValidType(param.Type.Value) {
+            return fmt.Errorf("line %d:%d: undefined type '%s' for parameter '%s'",
+                param.Type.Token.Line, param.Type.Token.Column, param.Type.Value, param.Name.Value)
+        }
+    }
 
-	// Check if method exists in parent classes
-	parentClass := classSymbol.Parent
-	for parentClass != "" {
-		if parentMethod, exists := st.LookupMethod(parentClass, method.Name.Value); exists {
-			// Check parameter types match exactly
-			if len(parentMethod.Parameters) != len(method.Parameters) {
-				return fmt.Errorf("wrong number of parameters in overridden method")
-			}
-			for i, param := range parentMethod.Parameters {
-				if param.Type.Value != method.Parameters[i].Type.Value {
-					return fmt.Errorf("parameter %d type mismatch in overridden method", i+1)
-				}
-			}
+    // Create method symbol
+    methodSym := &Symbol{
+        Name:       method.Name.Value,
+        Kind:       SymbolMethod,
+        ReturnType: method.ReturnType.Value,
+        Parameters: method.Parameters,
+        Token:      method.Token,
+    }
 
-			// Check return type conforms (covariant)
-			if !st.IsConformingType(method.ReturnType.Value, parentMethod.ReturnType, className) {
-				return fmt.Errorf("invalid override in class %s: return type %s does not conform to parent's return type %s",
-					className, method.ReturnType.Value, parentMethod.ReturnType)
-			}
-			break
-		}
-		parentClass = st.Classes[parentClass].Parent
-	}
+    // Check if method exists in parent classes
+    parentClass := classSymbol.Parent
+    for parentClass != "" {
+        if parentMethod, exists := st.LookupMethod(parentClass, method.Name.Value); exists {
+            // Check parameter types match exactly
+            if len(parentMethod.Parameters) != len(method.Parameters) {
+                return fmt.Errorf("line %d:%d: wrong number of parameters in overridden method '%s': expected %d, got %d",
+                    method.Token.Line, method.Token.Column, method.Name.Value, 
+                    len(parentMethod.Parameters), len(method.Parameters))
+            }
+            
+            for i, param := range parentMethod.Parameters {
+                if param.Type.Value != method.Parameters[i].Type.Value {
+                    return fmt.Errorf("line %d:%d: parameter #%d type mismatch in overridden method '%s': expected '%s', got '%s'",
+                        method.Parameters[i].Type.Token.Line, method.Parameters[i].Type.Token.Column, 
+                        i+1, method.Name.Value, param.Type.Value, method.Parameters[i].Type.Value)
+                }
+            }
 
-	// Add method to class features
-	classSymbol.Features[method.Name.Value] = methodSym
-	return nil
+            // Check return type conforms (covariant)
+            if !st.IsConformingType(method.ReturnType.Value, parentMethod.ReturnType, className) {
+                return fmt.Errorf("line %d:%d: invalid override in class '%s': return type '%s' does not conform to parent's return type '%s'",
+                    method.ReturnType.Token.Line, method.ReturnType.Token.Column, 
+                    className, method.ReturnType.Value, parentMethod.ReturnType)
+            }
+            break
+        }
+        parentClass = st.Classes[parentClass].Parent
+    }
+
+    // Add method to class features
+    classSymbol.Features[method.Name.Value] = methodSym
+    return nil
 }
 
 // AddAttribute adds and validates an attribute in the current class
@@ -771,32 +834,88 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 
 			return method.ReturnType
 		case *ast.Assignment:
-			return st.GetAssignmentType(e, currentClass)
-		case *ast.BlockExpression:
-			var lastType string
-			for _, expr := range e.Expressions {
-				lastType = st.GetExpressionType(expr, currentClass)
+			fmt.Printf("DEBUG: Processing assignment to %s\n", e.Name.Value)
+			
+			// First check if the variable being assigned to exists
+			var targetType string
+			var targetExists bool
+			
+			// Special case for 'self'
+			if e.Name.Value == "self" {
+				st.Errors = append(st.Errors, fmt.Sprintf("line %d:%d: cannot assign to 'self'", 
+					e.Name.Token.Line, e.Name.Token.Column))
+				return "SELF_TYPE" // Return SELF_TYPE but with error
 			}
+			
+			// Check in current scope and parent scopes
+			if symbol, exists := st.LookupSymbol(e.Name.Value); exists {
+				targetType = symbol.Type
+				targetExists = true
+			} else if attr, exists := st.LookupAttribute(currentClass, e.Name.Value); exists {
+				// Check if it's a class attribute
+				targetType = attr.Type
+				targetExists = true
+			} else {
+				// Variable is undefined
+				st.Errors = append(st.Errors, fmt.Sprintf("line %d:%d: undefined variable '%s'", 
+					e.Name.Token.Line, e.Name.Token.Column, e.Name.Value))
+				return "Object" // Default return type for error
+			}
+			
+			// Get the type of the expression being assigned
+			exprType := st.GetExpressionType(e.Expression, currentClass)
+			fmt.Printf("DEBUG: Assignment expression type: %s, target type: %s\n", exprType, targetType)
+			
+			// Check type conformance
+			if targetExists && !st.IsConformingType(exprType, targetType, currentClass) {
+				st.Errors = append(st.Errors, fmt.Sprintf("line %d:%d: type '%s' of assigned expression does not conform to type '%s' of identifier '%s'", 
+					e.Token.Line, e.Token.Column, 
+					exprType, targetType, e.Name.Value))
+			}
+			
+			return targetType
+		case *ast.BlockExpression:
+			fmt.Printf("DEBUG: Processing block expression with %d expressions\n", len(e.Expressions))
+			
+			if len(e.Expressions) == 0 {
+				// Empty block defaults to Object
+				return "Object"
+			}
+			
+			// Process all expressions in the block
+			var lastType string
+			for i, expr := range e.Expressions {
+				exprType := st.GetExpressionType(expr, currentClass)
+				fmt.Printf("DEBUG: Block expression #%d type: %s\n", i+1, exprType)
+				lastType = exprType
+			}
+			
+			// The type of a block is the type of its last expression
+			fmt.Printf("DEBUG: Final block expression type: %s\n", lastType)
 			return lastType
 		case *ast.ObjectIdentifier:
 			fmt.Printf("DEBUG: Looking up identifier: %s\n", e.Value)
 			if e.Value == "self" {
 				return "SELF_TYPE"
 			}
-
+		
 			// First try looking up in current scope and parent scopes
 			if symbol, exists := st.LookupSymbol(e.Value); exists {
 				fmt.Printf("DEBUG: Found identifier %s with type %s\n", e.Value, symbol.Type)
 				return symbol.Type
 			}
-
+		
 			// Then try looking up as a class attribute
 			if attr, exists := st.LookupAttribute(currentClass, e.Value); exists {
 				return attr.Type
 			}
-
-			st.Errors = append(st.Errors,
-				fmt.Sprintf("undefined identifier %s", e.Value))
+		
+			// If we get here, the identifier is undefined
+			errMsg := fmt.Sprintf("line %d:%d: undefined identifier '%s'", 
+				e.Token.Line, e.Token.Column, e.Value)
+			st.Errors = append(st.Errors, errMsg)
+			fmt.Printf("DEBUG: %s\n", errMsg)
+			
 			return "Object"
 		case *ast.BinaryExpression:
 			fmt.Printf("DEBUG: Binary expression with operator: %s\n", e.Operator)
