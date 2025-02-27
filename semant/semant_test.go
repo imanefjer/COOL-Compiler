@@ -3,6 +3,7 @@ package semant
 import (
 	"cool-compiler/ast"
 	"cool-compiler/lexer"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,16 @@ func TestSemanticAnalysis(t *testing.T) {
 		t.Run("Invalid Method Override", func(t *testing.T) {
 			classes := []*ast.Class{
 				{
+					Name: &ast.ObjectIdentifier{Value: "Main", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+							Body:       &ast.ObjectIdentifier{Value: "self", Token: dummyToken},
+						},
+					},
+				},
+				{
 					Name: &ast.ObjectIdentifier{Value: "Parent", Token: dummyToken},
 					Features: []ast.Feature{
 						&ast.Method{
@@ -43,6 +54,7 @@ func TestSemanticAnalysis(t *testing.T) {
 									Type: &ast.TypeIdentifier{Value: "Int", Token: dummyToken}},
 							},
 							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+							Body:       &ast.IntegerLiteral{Value: 0, Token: dummyToken},
 						},
 					},
 				},
@@ -57,13 +69,14 @@ func TestSemanticAnalysis(t *testing.T) {
 									Type: &ast.TypeIdentifier{Value: "String", Token: dummyToken}},
 							},
 							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+							Body:       &ast.IntegerLiteral{Value: 0, Token: dummyToken},
 						},
 					},
 				},
 			}
 			sa := NewSemanticAnalyzer()
 			sa.Analyze(&ast.Program{Classes: classes})
-			assertErrorsContain(t, sa.Errors(), "parameter 1 type mismatch")
+			assertErrorsContain(t, sa.Errors(), "parameter #1 type mismatch in overridden method 'test': expected 'Int', got 'String'")
 		})
 	})
 
@@ -193,6 +206,9 @@ func TestSemanticAnalysis(t *testing.T) {
 						&ast.Method{
 							Name:       &ast.ObjectIdentifier{Value: "create", Token: dummyToken},
 							ReturnType: &ast.TypeIdentifier{Value: "Parent", Token: dummyToken},
+							Body: &ast.NewExpression{
+								Type: &ast.TypeIdentifier{Value: "Parent", Token: dummyToken},
+							},
 						},
 					},
 				},
@@ -203,15 +219,18 @@ func TestSemanticAnalysis(t *testing.T) {
 						&ast.Method{
 							Name:       &ast.ObjectIdentifier{Value: "create", Token: dummyToken},
 							ReturnType: &ast.TypeIdentifier{Value: "Child", Token: dummyToken},
+							Body: &ast.NewExpression{
+								Type: &ast.TypeIdentifier{Value: "Child", Token: dummyToken},
+							},
 						},
 					},
 				},
 			}
 
 			methodCall := &ast.MethodCall{
-				Object: &ast.NewExpression{Type: &ast.TypeIdentifier{Value: "Child"}},
-				Type:   &ast.TypeIdentifier{Value: "Parent"},
-				Method: &ast.ObjectIdentifier{Value: "create"},
+				Object: &ast.NewExpression{Type: &ast.TypeIdentifier{Value: "Child", Token: dummyToken}},
+				Type:   &ast.TypeIdentifier{Value: "Parent", Token: dummyToken},
+				Method: &ast.ObjectIdentifier{Value: "create", Token: dummyToken},
 			}
 
 			sa := NewSemanticAnalyzer()
@@ -224,7 +243,7 @@ func TestSemanticAnalysis(t *testing.T) {
 	t.Run("Control Flow Structures", func(t *testing.T) {
 		t.Run("If Expression Type Validation", func(t *testing.T) {
 			ifExpr := &ast.IfExpression{
-				Condition:   &ast.IntegerLiteral{Value: 5}, 
+				Condition:   &ast.IntegerLiteral{Value: 5},
 				Consequence: &ast.IntegerLiteral{Value: 10},
 				Alternative: &ast.IntegerLiteral{Value: 20},
 			}
@@ -330,16 +349,217 @@ func TestSemanticAnalysis(t *testing.T) {
 		})
 	})
 
+	t.Run("Inheritance Cycle Detection", func(t *testing.T) {
+		t.Run("Direct Self-Inheritance", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name:   &ast.ObjectIdentifier{Value: "Bad", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "Bad", Token: dummyToken}, // Class inherits from itself
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+						},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertErrorsContain(t, sa.Errors(), "inheritance cycle detected")
+		})
+
+		t.Run("Indirect Cycle Through Multiple Classes", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name:   &ast.ObjectIdentifier{Value: "A", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "B", Token: dummyToken},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "B", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "C", Token: dummyToken},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "C", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "A", Token: dummyToken}, // Creates cycle A -> B -> C -> A
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertErrorsContain(t, sa.Errors(), "inheritance cycle detected")
+		})
+
+		t.Run("Multiple Independent Cycles", func(t *testing.T) {
+			classes := []*ast.Class{
+				// First cycle
+				{
+					Name:   &ast.ObjectIdentifier{Value: "A", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "B", Token: dummyToken},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "B", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "A", Token: dummyToken},
+				},
+				// Second cycle
+				{
+					Name:   &ast.ObjectIdentifier{Value: "X", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "Y", Token: dummyToken},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "Y", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "X", Token: dummyToken},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+
+			errors := sa.Errors()
+			cycleCount := 0
+			for _, err := range errors {
+				if strings.Contains(err, "inheritance cycle detected") {
+					cycleCount++
+				}
+			}
+			if cycleCount < 2 {
+				t.Errorf("Expected at least 2 cycle detection errors, got %d", cycleCount)
+			}
+		})
+
+		t.Run("Valid Complex Inheritance", func(t *testing.T) {
+			classes := []*ast.Class{
+				// Add Main class with required main method
+				{
+					Name: &ast.ObjectIdentifier{Value: "Main", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+							Body:       &ast.ObjectIdentifier{Value: "self", Token: dummyToken},
+						},
+					},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "D", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "C", Token: dummyToken},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "C", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "B", Token: dummyToken},
+				},
+				{
+					Name:   &ast.ObjectIdentifier{Value: "B", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "A", Token: dummyToken},
+				},
+				{
+					Name: &ast.ObjectIdentifier{Value: "A", Token: dummyToken},
+					// No parent specified, should default to Object
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertNoErrors(t, sa.Errors())
+		})
+
+		t.Run("Inheritance from Undefined Class", func(t *testing.T) {
+			classes := []*ast.Class{
+				{
+					Name:   &ast.ObjectIdentifier{Value: "Bad", Token: dummyToken},
+					Parent: &ast.TypeIdentifier{Value: "NonExistent", Token: dummyToken},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+			assertErrorsContain(t, sa.Errors(), "inherits from undefined class")
+		})
+	})
+
+	t.Run("Class Definition Validation", func(t *testing.T) {
+		t.Run("Duplicate Class Definitions", func(t *testing.T) {
+			classes := []*ast.Class{
+				// Main class
+				{
+					Name: &ast.ObjectIdentifier{Value: "Main", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "main", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Object", Token: dummyToken},
+							Body:       &ast.ObjectIdentifier{Value: "self", Token: dummyToken},
+						},
+					},
+				},
+				// First definition of class A
+				{
+					Name: &ast.ObjectIdentifier{Value: "A", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "foo", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+							Body:       &ast.IntegerLiteral{Value: 1, Token: dummyToken},
+						},
+					},
+				},
+				// Duplicate definition of class A
+				{
+					Name: &ast.ObjectIdentifier{Value: "A", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "bar", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+							Body:       &ast.IntegerLiteral{Value: 2, Token: dummyToken},
+						},
+					},
+				},
+				// Attempt to redefine a basic class
+				{
+					Name: &ast.ObjectIdentifier{Value: "Int", Token: dummyToken},
+					Features: []ast.Feature{
+						&ast.Method{
+							Name:       &ast.ObjectIdentifier{Value: "test", Token: dummyToken},
+							ReturnType: &ast.TypeIdentifier{Value: "Int", Token: dummyToken},
+							Body:       &ast.IntegerLiteral{Value: 0, Token: dummyToken},
+						},
+					},
+				},
+			}
+			sa := NewSemanticAnalyzer()
+			sa.Analyze(&ast.Program{Classes: classes})
+
+			errors := sa.Errors()
+
+			// Check for class A redefinition error
+			assertErrorsContain(t, errors, "Class A is redefined")
+
+			// Check for basic class Int redefinition error
+			assertErrorsContain(t, errors, "Class Int cannot be redefined")
+
+			// Count the number of redefinition errors
+			redefinitionErrors := 0
+			for _, err := range errors {
+				if strings.Contains(err, "redefined") || strings.Contains(err, "cannot be redefined") {
+					redefinitionErrors++
+				}
+			}
+
+			if redefinitionErrors != 2 {
+				t.Errorf("Expected exactly 2 redefinition errors, got %d", redefinitionErrors)
+			}
+		})
+	})
 }
 
 func assertErrorsContain(t *testing.T, errors []string, substr string) {
 	t.Helper()
+	found := false
+	fmt.Printf("Looking for error containing: %q\n", substr)
+	fmt.Printf("Got errors:\n")
 	for _, err := range errors {
+		fmt.Printf("  - %s\n", err)
 		if strings.Contains(err, substr) {
-			return
+			found = true
 		}
 	}
-	t.Errorf("Expected error containing %q, got: %v", substr, errors)
+	if !found {
+		t.Errorf("Expected error containing %q, got: %v", substr, errors)
+	}
 }
 
 func assertNoErrors(t *testing.T, errors []string) {

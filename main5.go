@@ -70,7 +70,6 @@ func main() {
 	}
 
 	fmt.Println("\n=== Generated LLVM IR ===")
-	fmt.Println(module.String())
 
 	// Write the LLVM IR to a file.
 	irFilename := strings.TrimSuffix(*inputFilePath, ".cool") + ".ll"

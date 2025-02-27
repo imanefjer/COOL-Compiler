@@ -800,6 +800,7 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 
 	result := func() string {
 		switch e := expr.(type) {
+		
 		case *ast.IntegerLiteral:
 			return "Int"
 		case *ast.StringLiteral:
@@ -947,6 +948,16 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			// The type of a block is the type of its last expression
 			fmt.Printf("DEBUG: Final block expression type: %s\n", lastType)
 			return lastType
+		case *ast.NotExpression:
+			fmt.Printf("DEBUG: Processing not expression\n")
+			exprType := st.GetExpressionType(e.Expression, currentClass)
+			
+			if exprType != "Bool" {
+				st.Errors = append(st.Errors, fmt.Sprintf("line %d:%d: 'not' operator requires Bool operand, got %s",
+					e.Token.Line, e.Token.Column, exprType))
+			}
+			
+			return "Bool"
 		case *ast.ObjectIdentifier:
 			fmt.Printf("DEBUG: Looking up identifier: %s\n", e.Value)
 			if e.Value == "self" {

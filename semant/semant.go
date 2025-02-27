@@ -338,6 +338,7 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 		if exprType != "Bool" {
 			sa.errors = append(sa.errors, fmt.Sprintf("line %d: not requires Bool operand", e.Token.Line))
 		}
+		
 	case *ast.LetExpression:
 		// Create new scope for let bindings
 		sa.symbolTable.EnterScope(SymbolLocal, className)

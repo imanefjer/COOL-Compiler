@@ -20,13 +20,14 @@ class Animal {
     getName() : String {
         name
     };
+    
     print() : Object {
-        (new IO).out_string("zerzer,name ")
+        (new IO).out_string("this is an animal \n")
     };
 };
 
 class Dog inherits Animal {
-    breed : String <- "Mixdsdqed";
+    breed : String <- "Mixed";
 
     init(n : String) : Dog {
         {
@@ -39,42 +40,73 @@ class Dog inherits Animal {
         breed
     };
     print() : Object {
-        (new IO).out_string("zerzer,kifach ")
+        (new IO).out_string("this is a dog \n")
     };
-};
-class Point {
-  x : Int;
-  y : Int;
-
-  init(x0 : Int, y0 : Int) : Point {
-    {
-      x <- x0;
-      y <- y0;
-      self;
-    }
-  };
-
-  getX() : Int { x };
-  getY() : Int { y };
 };
 
 class Main {
-    a : Dog;
+   a : Animal;
     b : Int;
     c : String;
     e : Bool;
-    d : Animal;
+    d : Int;
+    f:String;
+    sum (i : Int, j : Int, t: Int) : Int {
+        i + j + t
+       
+    };
     main() : Object {
         {
+        
+            (new IO).out_string(d.type_name());
+            (new IO).out_string("\n");
+            d <- 10;
+
             let myDog : Dog <- (new Dog).init("Buddy") in {
-                (new IO).out_string("zerzerz");
-                myDog.setName("test");
+                (new IO).out_string("myDog's name is ");
+                myDog.setName("Max");
                 (new IO).out_string("\n");
                 let dog2 : Dog <- myDog.copy() in {
                     (new IO).out_string(dog2.getName());
                 };
+                (new IO).out_string("\n");
+                (new IO).out_string("myDog's breed is ");
+                (new IO).out_string(myDog.getBreed());
+                (new IO).out_string("\n");  
                 myDog@Animal.print();
             };
+            b <- 5;
+            while (b < 7) loop
+                b <- b + 1
+            pool;
+            (new IO).out_string("b is ");
+            (new IO).out_string(b.type_name());
+            (new IO).out_string(" and its value is ");
+            (new IO).out_int(b);
+            c <- "Imane";
+            f<- " Fjer";
+            (new IO).out_string(c.concat(f));
+            c <- c.substr(2, 3);
+            (new IO).out_string(c.concat(f));
+
+            if (b = 10) then
+                (new IO).out_string("b is indeed 10")
+            else
+            {
+(new IO).out_string("b is not 10");
+                (new IO).out_int(c.length());
+            }
+                
+
+            fi;
+                        case b of
+                dog : Dog => (new IO).out_string("b is a dog");
+                animal : Animal => (new IO).out_string("b is an animal");
+                int : Int  => (new IO).out_string("b is an andsimal");
+                object: Object => (new IO).out_string("b is unknown");
+            esac;
+    
+            
         }
     };
 };
