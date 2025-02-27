@@ -1,113 +1,56 @@
-
-class Animal {
-    name : String <- "Unknown";
-
-    init(n : String) : Animal {
-        {
-            name <- n;
-            self;
-        }
-        
-    };
-
-    setName(n : String) : Animal {
-        {
-            name <- n;
-            self;
-        }
-       
-    };
-
-    getName() : String {
-        name
-    };
-    
-    print() : Object {
-        (new IO).out_string("this is an animal \n")
-    };
-};
-
-class Dog inherits Animal {
-    breed : String <- "Mixed";
-
-    init(n : String) : Dog {
-        {
-            name <- n;
-            self;
-        }
-    };
-
-    getBreed() : String {
-        breed
-    };
-    print() : Object {
-        (new IO).out_string("this is a dog \n")
-    };
-};
-
-class Main {
-   a : Animal;
-    b : Int;
-    c : String;
-    e : Bool;
-    d : Int;
-    f:String;
-    sum (i : Int, j : Int, t: Int) : Int {
-        i + j + t
-       
-    };
-    main() : Object {
-        {
-        
-            (new IO).out_string(d.type_name());
-            (new IO).out_string("\n");
-            d <- 10;
-
-            let myDog : Dog <- (new Dog).init("Buddy") in {
-                (new IO).out_string("myDog's name is ");
-                myDog.setName("Max");
-                (new IO).out_string("\n");
-                let dog2 : Dog <- myDog.copy() in {
-                    (new IO).out_string(dog2.getName());
-                };
-                (new IO).out_string("\n");
-                (new IO).out_string("myDog's breed is ");
-                (new IO).out_string(myDog.getBreed());
-                (new IO).out_string("\n");  
-                myDog@Animal.print();
-            };
-            b <- 5;
-            while (b < 7) loop
-                b <- b + 1
-            pool;
-            (new IO).out_string("b is ");
-            (new IO).out_string(b.type_name());
-            (new IO).out_string(" and its value is ");
-            (new IO).out_int(b);
-            c <- "Imane";
-            f<- " Fjer";
-            (new IO).out_string(c.concat(f));
-            c <- c.substr(2, 3);
-            (new IO).out_string(c.concat(f));
-
-            if (b = 10) then
-                (new IO).out_string("b is indeed 10")
-            else
-            {
-(new IO).out_string("b is not 10");
-                (new IO).out_int(c.length());
+class Main inherits IO {
+    a : Int;
+        gcd_iterative(a: Int, b: Int): Int {    
+            let temp: Int <- 0, x: Int <- a, y: Int <- b in {    
+                while 0 < y loop {      
+                    temp <- y;      
+                    y <- x - (x/y)*y;      
+                    x <- temp;     
+                } pool;     
+                x;   
             }
-                
+        };
 
+    gcd_recursive(a: Int, b: Int): Int {
+        {
+            if b = 0 then
+                a
+            else
+                gcd_recursive(b, a - (a/b)*b)
             fi;
-                        case b of
-                dog : Dog => (new IO).out_string("b is a dog");
-                animal : Animal => (new IO).out_string("b is an animal");
-                int : Int  => (new IO).out_string("b is an andsimal");
-                object: Object => (new IO).out_string("b is unknown");
-            esac;
-    
-            
+        }
+    };
+
+    main(): Object {
+        {
+            out_string("Iterative GCD(3,6) = ");
+            out_int(gcd_iterative(3,6));
+            out_string("\n");
+
+            out_string("Recursive GCD(48,18) = ");
+            out_int(gcd_recursive(48,18));
+            out_string("\n");
+
+            out_string("Iterative GCD(54,14) = ");
+            out_int(gcd_iterative(54,14));
+            out_string("\n");
+
+            out_string("Recursive GCD(60,30) = ");
+            out_int(gcd_recursive(60,30));
+            out_string("\n");
+
+            -- Test with larger numbers
+            out_string("Iterative GCD(120,55) = ");
+            out_int(gcd_iterative(120,55));
+            out_string("\n");
+
+            out_string("Recursive GCD(175,44) = ");
+            out_int(gcd_recursive(175,44));
+            out_string("\n");
+            out_string("Enter a number");
+            a <- in_int();
+            out_int(a);
+
         }
     };
 };

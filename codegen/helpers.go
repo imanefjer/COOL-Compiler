@@ -21,7 +21,7 @@ func (g *CodeGenerator) handleSpecialMethods(block *ir.Block, e *ast.MethodCall,
 	
 	// Handle type_name method
 	if e.Method.Value == "type_name" {
-		result, resultBlock, err = g.generateTypeNameMethod(block, e, receiverType)
+		result, resultBlock, err = g.generateTypeNameMethod(block,receiverType)
 		handled = true
 		return
 	}
@@ -45,7 +45,7 @@ func (g *CodeGenerator) handleSpecialMethods(block *ir.Block, e *ast.MethodCall,
 }
 
 // Generate code for the type_name method
-func (g *CodeGenerator) generateTypeNameMethod(block *ir.Block, e *ast.MethodCall, receiverType string) (value.Value, *ir.Block, error) {
+func (g *CodeGenerator) generateTypeNameMethod(block *ir.Block, receiverType string) (value.Value, *ir.Block, error) {
 	// For primitive types (Bool, Int), use Object's type_name implementation
 	methodName := "Object_type_name"
 	methodFunc := g.methods[methodName]
