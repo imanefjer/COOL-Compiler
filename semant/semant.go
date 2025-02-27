@@ -54,7 +54,6 @@ func (sa *SemanticAnalyzer) topologicalSort(classes []*ast.Class) []*ast.Class {
     return order
 }
 func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
-	fmt.Println("\n=== Building Class Hierarchy ===")
 
 	for _, class := range program.Classes {
 		className := class.Name.Value
@@ -68,7 +67,6 @@ func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
 				fmt.Sprintf("Class %s is redefined", className))
 			continue
 		}
-		fmt.Printf("Pre-registering class: %s\n", class.Name.Value)
 		sa.symbolTable.Classes[class.Name.Value] = &Symbol{
 			Name:     class.Name.Value,
 			Kind:     SymbolClass,
@@ -76,7 +74,6 @@ func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
 		}
 	}
 	for _, class := range program.Classes {
-		fmt.Printf("Setting up inheritance for class: %s\n", class.Name.Value)
 		if err := sa.setupInheritance(class); err != nil {
 			sa.errors = append(sa.errors, err.Error())
 		}
@@ -90,7 +87,6 @@ func (sa *SemanticAnalyzer) Analyze(program *ast.Program) {
 	sortedClasses := sa.topologicalSort(program.Classes)
 
 	for _, class := range sortedClasses {
-		fmt.Printf("\nAnalyzing features of class: %s\n", class.Name.Value)
 		sa.analyzeClass(class)
 	}
 
@@ -169,8 +165,6 @@ func (sa *SemanticAnalyzer) analyzeClass(class *ast.Class) {
                     Type:  param.Type.Value,
                     Token: param.Name.Token,
                 }
-                fmt.Printf("DEBUG: Added parameter '%s' with type '%s' to method '%s'\n", 
-                    param.Name.Value, param.Type.Value, f.Name.Value)
             }
             
             // Analyze method body
@@ -393,8 +387,6 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 				Token: binding.Name.Token,
 			}
 			
-			fmt.Printf("DEBUG: Added let binding '%s' with type '%s' to scope\n", 
-				binding.Name.Value, binding.Type.Value)
 		}
 	
 		// Analyze the body of the let expression
@@ -422,8 +414,8 @@ case *ast.MethodCall:
         
         // Get the object type for the dispatch
         objectType := sa.symbolTable.GetExpressionType(e.Object, className)
-        fmt.Printf("DEBUG: Method call on object of type: %s\n", objectType)
-        
+
+		
         // For static dispatch (@Type)
         if e.Type != nil {
             // Check if the type exists
@@ -508,7 +500,6 @@ case *ast.MethodCall:
     }
 	// Add this case to the switch statement in analyzeExpression
 case *ast.FunctionCall:
-    fmt.Printf("DEBUG: Analyzing function call to method: %s\n", e.Function.Value)
     
     // Analyze all arguments
     for _, arg := range e.Arguments {
@@ -567,7 +558,6 @@ func (sa *SemanticAnalyzer) validateMethodArguments(method *Symbol, args []ast.E
     }
 }
 func (sa *SemanticAnalyzer) validateMainClass(program *ast.Program) {
-	fmt.Println("\n=== Validating Main Class ===")
 
 	// Look for Main class
 	var mainClass *ast.Class

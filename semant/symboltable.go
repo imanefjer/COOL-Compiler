@@ -290,7 +290,6 @@ func (g *InheritanceGraph) AddInheritanceEdge(child, parent string) error {
 
 // DetectCycles checks for inheritance cycles starting from a given class
 func (g *InheritanceGraph) DetectCycles(className string) bool {
-	fmt.Printf("\n=== Checking for inheritance cycles starting from %s ===\n", className)
 	// Reset recursion stack for new traversal
 	g.RecursionStack = make(map[string]bool)
 	g.Visited = make(map[string]bool)
@@ -356,7 +355,6 @@ func (g *InheritanceGraph) ValidateInheritance() []string {
 
 // LookupSymbol searches for a symbol in current and parent scopes
 func (st *SymbolTable) LookupSymbol(name string) (*Symbol, bool) {
-    fmt.Printf("\n=== Looking up symbol: %s ===\n", name)
     
     // Special case for 'self'
     if name == "self" {
@@ -371,21 +369,8 @@ func (st *SymbolTable) LookupSymbol(name string) (*Symbol, bool) {
     
     // Start from current scope and work up
     for scope := st.CurrentScope; scope != nil; scope = scope.Parent {
-        scopeType := "unknown"
-        switch scope.Kind {
-        case SymbolClass:
-            scopeType = "class"
-        case SymbolMethod:
-            scopeType = "method"
-        case SymbolLocal:
-            scopeType = "local block"
-        }
-        
-        fmt.Printf("DEBUG: Checking %s scope for symbol %s\n", scopeType, name)
-        
         if symbol, exists := scope.Symbols[name]; exists {
-            fmt.Printf("DEBUG: Found symbol %s with type %s in %s scope\n", 
-                name, symbol.Type, scopeType)
+            
             return symbol, true
         }
     }
@@ -393,16 +378,13 @@ func (st *SymbolTable) LookupSymbol(name string) (*Symbol, bool) {
     // If not found in any scope, check if it's a class attribute
     if st.CurrentScope != nil && st.CurrentScope.Class != "" {
         currentClass := st.CurrentScope.Class
-        fmt.Printf("DEBUG: Checking for %s as attribute in class %s\n", name, currentClass)
         
         if attr, exists := st.LookupAttribute(currentClass, name); exists {
-            fmt.Printf("DEBUG: Found attribute %s with type %s in class %s\n", 
-                name, attr.Type, currentClass)
+           
             return attr, true
         }
     }
     
-    fmt.Printf("DEBUG: Symbol %s not found in any scope\n", name)
     return nil, false
 }
 
@@ -441,7 +423,6 @@ func (st *SymbolTable) lookupInherited(className, symbolName string) (*Symbol, b
 
 // LookupMethod looks up a method in a specific class and its parent classes
 func (st *SymbolTable) LookupMethod(className, methodName string) (*Symbol, bool) {
-	fmt.Printf("Looking up method %s in class %s\n", methodName, className)
 
 	// If className is SELF_TYPE, we need to look in Object first for built-in methods
 	if className == "SELF_TYPE" {
@@ -543,7 +524,6 @@ func (st *SymbolTable) GetClassFeatures(className string) map[string]*Symbol {
 }
 // AddMethod adds and validates a method in the current class
 func (st *SymbolTable) AddMethod(className string, method *ast.Method) error {
-    fmt.Printf("\n=== Adding method %s to class %s ===\n", method.Name.Value, className)
 
     // Get the class symbol
     classSymbol, exists := st.Classes[className]
@@ -618,7 +598,6 @@ func (st *SymbolTable) AddMethod(className string, method *ast.Method) error {
 
 // AddAttribute adds and validates an attribute in the current class
 func (st *SymbolTable) AddAttribute(className string, attr *ast.Attribute) error {
-	fmt.Printf("\n=== Adding attribute %s to class %s ===\n", attr.Name.Value, className)
 
 	// Get the class symbol first
 	classSymbol, exists := st.Classes[className]
@@ -715,7 +694,6 @@ func (st *SymbolTable) isValidType(typeName string) bool {
 
 // IsConformingType checks if type1 conforms to type2 following Cool's type rules
 func (st *SymbolTable) IsConformingType(type1, type2 string, currentClass string) bool {
-	fmt.Printf("\n=== Checking if %s conforms to %s in class %s ===\n", type1, type2, currentClass)
 
 	// Handle SELF_TYPE cases
 	if type1 == "SELF_TYPE" && type2 == "SELF_TYPE" {
@@ -751,8 +729,6 @@ func (st *SymbolTable) IsConformingType(type1, type2 string, currentClass string
 
 // GetLeastUpperBound finds the closest common ancestor of two types
 func (st *SymbolTable) GetLeastUpperBound(type1, type2 string, currentClass string) string {
-	fmt.Printf("\n=== Finding LUB for types %s and %s (in class %s) ===\n",
-		type1, type2, currentClass)
 
 	// Handle SELF_TYPE cases
 	if type1 == "SELF_TYPE" && type2 == "SELF_TYPE" {
@@ -795,8 +771,6 @@ func (st *SymbolTable) ResolveSelfType(typeName string, currentClass string) str
 
 // GetExpressionType determines the static type of an expression, handling SELF_TYPE
 func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass string) string {
-	fmt.Printf("\n=== Getting type for expression in class %s ===\n", currentClass)
-	fmt.Printf("DEBUG: Expression type being checked: %T\n", expr)
 
 	result := func() string {
 		switch e := expr.(type) {
@@ -808,14 +782,12 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 		case *ast.BooleanLiteral:
 			return "Bool"
 		case *ast.MethodCall:
-			fmt.Printf("\nDEBUG: Processing method call %s\n", e.Method.Value)
 			var objectType string
 			if e.Object != nil {
 				objectType = st.GetExpressionType(e.Object, currentClass)
 			} else {
 				objectType = "SELF_TYPE"
 			}
-			fmt.Printf("DEBUG: Method call object type: %s\n", objectType)
 
 			method, exists := st.LookupMethod(objectType, e.Method.Value)
 			if !exists {
@@ -835,13 +807,10 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 
 			return method.ReturnType
 		case *ast.FunctionCall:
-			fmt.Printf("\nDEBUG: Getting type for function call to %s\n", e.Function.Value)
 			
 			// Try to find the method in the current class or its ancestors
 			method, exists := st.LookupMethod(currentClass, e.Function.Value)
-			if !exists {
-				fmt.Printf("DEBUG: Method %s not found in class %s\n", e.Function.Value, currentClass)
-				
+			if !exists {				
 				// Look specifically in IO class for common methods
 				if e.Function.Value == "out_string" || e.Function.Value == "out_int" || 
 				   e.Function.Value == "in_string" || e.Function.Value == "in_int" {
@@ -858,9 +827,6 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 						e.Function.Value, currentClass))
 				return "Object" // Default return type for error
 			}
-			
-			fmt.Printf("DEBUG: Found method %s with return type %s\n", 
-				e.Function.Value, method.ReturnType)
 			
 			// Check if the method exists but argument count doesn't match
 			if len(e.Arguments) != len(method.Parameters) {
@@ -889,7 +855,6 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			}
 			return method.ReturnType
 		case *ast.Assignment:
-			fmt.Printf("DEBUG: Processing assignment to %s\n", e.Name.Value)
 			
 			// First check if the variable being assigned to exists
 			var targetType string
@@ -918,9 +883,7 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			}
 			
 			// Get the type of the expression being assigned
-			exprType := st.GetExpressionType(e.Expression, currentClass)
-			fmt.Printf("DEBUG: Assignment expression type: %s, target type: %s\n", exprType, targetType)
-			
+			exprType := st.GetExpressionType(e.Expression, currentClass)			
 			// Check type conformance
 			if targetExists && !st.IsConformingType(exprType, targetType, currentClass) {
 				st.Errors = append(st.Errors, fmt.Sprintf("line %d:%d: type '%s' of assigned expression does not conform to type '%s' of identifier '%s'", 
@@ -930,7 +893,6 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			
 			return targetType
 		case *ast.BlockExpression:
-			fmt.Printf("DEBUG: Processing block expression with %d expressions\n", len(e.Expressions))
 			
 			if len(e.Expressions) == 0 {
 				// Empty block defaults to Object
@@ -939,17 +901,13 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			
 			// Process all expressions in the block
 			var lastType string
-			for i, expr := range e.Expressions {
+			for _, expr := range e.Expressions {
 				exprType := st.GetExpressionType(expr, currentClass)
-				fmt.Printf("DEBUG: Block expression #%d type: %s\n", i+1, exprType)
 				lastType = exprType
 			}
 			
-			// The type of a block is the type of its last expression
-			fmt.Printf("DEBUG: Final block expression type: %s\n", lastType)
 			return lastType
 		case *ast.NotExpression:
-			fmt.Printf("DEBUG: Processing not expression\n")
 			exprType := st.GetExpressionType(e.Expression, currentClass)
 			
 			if exprType != "Bool" {
@@ -959,14 +917,12 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			
 			return "Bool"
 		case *ast.ObjectIdentifier:
-			fmt.Printf("DEBUG: Looking up identifier: %s\n", e.Value)
 			if e.Value == "self" {
 				return "SELF_TYPE"
 			}
 		
 			// First try looking up in current scope and parent scopes
 			if symbol, exists := st.LookupSymbol(e.Value); exists {
-				fmt.Printf("DEBUG: Found identifier %s with type %s\n", e.Value, symbol.Type)
 				return symbol.Type
 			}
 		
@@ -978,19 +934,14 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			// If we get here, the identifier is undefined
 			errMsg := fmt.Sprintf("line %d:%d: undefined identifier '%s'", 
 				e.Token.Line, e.Token.Column, e.Value)
-			st.Errors = append(st.Errors, errMsg)
-			fmt.Printf("DEBUG: %s\n", errMsg)
-			
+			st.Errors = append(st.Errors, errMsg)			
 			return "Object"
 		case *ast.BinaryExpression:
-			fmt.Printf("DEBUG: Binary expression with operator: %s\n", e.Operator)
 			leftType := st.GetExpressionType(e.Left, currentClass)
 			rightType := st.GetExpressionType(e.Right, currentClass)
-			fmt.Printf("DEBUG: Binary expression left type: %s, right type: %s\n", leftType, rightType)
 
 			// For arithmetic operations
 			if e.Operator == "+" || e.Operator == "-" || e.Operator == "*" || e.Operator == "/" {
-				fmt.Println("DEBUG: Arithmetic operator detected")
 				if leftType != "Int" || rightType != "Int" {
 					st.Errors = append(st.Errors, fmt.Sprintf("Arithmetic operation %s requires Int operands", e.Operator))
 				}
@@ -999,19 +950,16 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 
 			// For comparisons
 			if e.Operator == "<" || e.Operator == "<=" || e.Operator == "=" {
-				fmt.Printf("DEBUG: Comparison operator detected: %s\n", e.Operator)
 				if e.Operator != "=" && (leftType != "Int" || rightType != "Int") {
 					st.Errors = append(st.Errors, fmt.Sprintf("Comparison %s requires Int operands", e.Operator))
 				}
 				return "Bool"
 			}
 
-			fmt.Println("DEBUG: Unknown operator, returning Object")
 			return "Object"
 		case *ast.IsVoidExpression:
 			return "Bool" // isvoid always returns Bool
 		case *ast.NewExpression:
-			fmt.Printf("DEBUG: Processing new expression for type: %s\n", e.Type.Value)
 			if e.Type.Value == "SELF_TYPE" {
 				return currentClass
 			}
@@ -1023,14 +971,11 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			}
 			return e.Type.Value
 		case *ast.CaseExpression:
-			fmt.Printf("Processing case expression\n")
 			exprType := st.GetExpressionType(e.Expression, currentClass)
-			fmt.Printf("Case test expression type: %s\n", exprType)
 
 			// Debug print for cases
-			for i, branch := range e.Cases {
-				fmt.Printf("Checking case branch %d: variable %s of type %s\n",
-					i, branch.Name.Value, branch.Type.Value)
+			for _, branch := range e.Cases {
+		
 
 				// Check if branch type conforms to expression type
 				if !st.IsConformingType(exprType, branch.Type.Value, currentClass) {
@@ -1039,13 +984,8 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 						branch.Type.Token.Column,
 						branch.Type.Value,
 						exprType)
-					fmt.Printf("Adding error: %s\n", errMsg)
 					st.Errors = append(st.Errors, errMsg)
 				}
-
-				// Also check the branch expression type
-				branchExprType := st.GetExpressionType(branch.Expression, currentClass)
-				fmt.Printf("Branch expression type: %s\n", branchExprType)
 			}
 
 			// Get LUB of all branch types
@@ -1058,12 +998,9 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 			for _, t := range branchTypes[1:] {
 				resultType = st.GetLeastUpperBound(resultType, t, currentClass)
 			}
-			fmt.Printf("Case expression final type: %s\n", resultType)
 			return resultType
 		case *ast.IfExpression:
-			fmt.Printf("DEBUG: Getting type for if expression\n")
 			condType := st.GetExpressionType(e.Condition, currentClass)
-			fmt.Printf("DEBUG: Condition type: %s\n", condType)
 
 			if condType != "Bool" {
 				st.Errors = append(st.Errors, fmt.Sprintf("if condition must be Bool, got %s", condType))
@@ -1071,15 +1008,12 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 
 			thenType := st.GetExpressionType(e.Consequence, currentClass)
 			elseType := st.GetExpressionType(e.Alternative, currentClass)
-			fmt.Printf("DEBUG: Then branch type: %s, Else branch type: %s\n", thenType, elseType)
 
 			// The type of an if expression is the LUB of its branches
 			return st.GetLeastUpperBound(thenType, elseType, currentClass)
 		case *ast.InfixExpression:
-			fmt.Printf("DEBUG: Infix expression with operator: %s\n", e.Operator)
 			leftType := st.GetExpressionType(e.Left, currentClass)
 			rightType := st.GetExpressionType(e.Right, currentClass)
-			fmt.Printf("DEBUG: Infix expression left type: %s, right type: %s\n", leftType, rightType)
 
 			// For arithmetic operations
 			if e.Operator == "+" || e.Operator == "-" || e.Operator == "*" || e.Operator == "/" {
@@ -1091,24 +1025,20 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 
 			// For comparisons
 			if e.Operator == "<" || e.Operator == "<=" || e.Operator == "=" {
-				fmt.Printf("DEBUG: Comparison operator detected: %s\n", e.Operator)
 				if e.Operator != "=" && (leftType != "Int" || rightType != "Int") {
 					st.Errors = append(st.Errors, fmt.Sprintf("Comparison %s requires Int operands", e.Operator))
 				}
 				return "Bool"
 			}
 
-			fmt.Printf("DEBUG: Unknown operator %s, returning Object\n", e.Operator)
 			return "Object"
 		case *ast.LetExpression:
-			fmt.Printf("\n=== Processing let expression ===\n")
 
 			// Create new scope for let bindings
 			st.EnterScope(SymbolLocal, currentClass)
 
 			// Process initialization
 			initType := st.GetExpressionType(e.Init, currentClass)
-			fmt.Printf("DEBUG: Let init expression type: %s\n", initType)
 
 			// Validate type conformance
 			if !st.IsConformingType(initType, e.Type.Value, currentClass) {
@@ -1123,12 +1053,9 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 				Kind: SymbolLocal,
 				Type: e.Type.Value,
 			}
-			fmt.Printf("DEBUG: Added binding %s with type %s to scope\n",
-				e.Name.Value, e.Type.Value)
 
 			// Process body in the same scope
 			bodyType := st.GetExpressionType(e.Body, currentClass)
-			fmt.Printf("DEBUG: Let body type: %s\n", bodyType)
 
 			// Exit scope after processing body
 			st.ExitScope()
@@ -1139,19 +1066,15 @@ func (st *SymbolTable) GetExpressionType(expr ast.Expression, currentClass strin
 		return "Object" // Default case
 	}()
 
-	fmt.Printf("DEBUG: Final expression type result: %s\n", result)
 	return result
 }
 
 // GetMethodCallType handles type resolution for method calls, including SELF_TYPE
 func (st *SymbolTable) GetMethodCallType(call *ast.MethodCall, currentClass string) string {
-	fmt.Printf("\n=== Resolving method call type in class %s ===\n", currentClass)
-	fmt.Printf("Method name: %s\n", call.Method.Value)
 	// Get the type of the object being dispatched on
 	var dispatchType string
 	if call.Object != nil {
 		dispatchType = st.GetExpressionType(call.Object, currentClass)
-		fmt.Printf("DEBUG: Dispatch object type: %s\n", dispatchType)
 	} else {
 		dispatchType = "SELF_TYPE" // Implicit self dispatch
 	}
@@ -1163,12 +1086,10 @@ func (st *SymbolTable) GetMethodCallType(call *ast.MethodCall, currentClass stri
 
 	// Resolve SELF_TYPE in dispatch type
 	actualDispatchType := st.ResolveSelfType(dispatchType, currentClass)
-	fmt.Printf("DEBUG: Actual dispatch type after resolution: %s\n", actualDispatchType)
 
 	// Look up the method
 	method, exists := st.LookupMethod(actualDispatchType, call.Method.Value)
 	if !exists {
-		fmt.Printf("DEBUG: Method %s not found in type %s\n", call.Method.Value, actualDispatchType)
 		return "Object"
 	}
 
@@ -1177,7 +1098,6 @@ func (st *SymbolTable) GetMethodCallType(call *ast.MethodCall, currentClass stri
 		return dispatchType // Preserve SELF_TYPE if that's what we started with
 	}
 
-	fmt.Printf("DEBUG: Method %s found with return type: %s\n", call.Method.Value, method.ReturnType)
 	return method.ReturnType
 }
 
@@ -1241,8 +1161,6 @@ func (st *SymbolTable) ValidateWhileCondition(condition ast.Expression, currentC
 
 // ValidateCaseBranches checks for case branch type validity and exhaustiveness
 func (st *SymbolTable) ValidateCaseBranches(branches []*ast.Case, currentClass string) error {
-	fmt.Printf("\n=== Validating case branches in class %s ===\n", currentClass)
-	fmt.Printf("Number of branches: %d\n", len(branches))
 	seenTypes := make(map[string]bool)
 	if len(branches) == 0 {
 		return fmt.Errorf("case expression must have at least one branch")
