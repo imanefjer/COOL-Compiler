@@ -558,79 +558,105 @@ func (g *CodeGenerator) generateIOOutInt(fn *ir.Func, entryBlock *ir.Block) erro
 	entryBlock.NewRet(self)
 	return nil
 }
-
 func (g *CodeGenerator) generateRegularMethod(className string, method *ast.Method, fn *ir.Func, entryBlock *ir.Block) error {
-	// Retrieve the self parameter (declared as i8*).
-	self := fn.Params[0]
-	classType, ok := g.classTypes[className]
-	if !ok {
-		return fmt.Errorf("class type not found for %s", className)
-	}
-	typedSelf := entryBlock.NewBitCast(self, types.NewPointer(classType))
-	g.locals["$self"] = typedSelf
-	g.localsTypes["$self"] = className
-	g.locals["self"] = typedSelf
-	g.localsTypes["self"] = className
-	
-	// Process method parameters and add them to locals
-	for i, astParam := range method.Parameters {
-		if i+1 >= len(fn.Params) {
-			return fmt.Errorf("parameter %s not found in LLVM function parameters", astParam.Name.Value)
-		}
-		llvmParam := fn.Params[i+1] // i+1 because 0 is self
+    // Save the current locals and types to restore later
+    oldLocals := make(map[string]value.Value)
+    oldTypes := make(map[string]string)
+    
+    // Retrieve the self parameter (declared as i8*).
+    self := fn.Params[0]
+    classType, ok := g.classTypes[className]
+    if !ok {
+        return fmt.Errorf("class type not found for %s", className)
+    }
+    typedSelf := entryBlock.NewBitCast(self, types.NewPointer(classType))
+    g.locals["$self"] = typedSelf
+    g.localsTypes["$self"] = className
+    g.locals["self"] = typedSelf
+    g.localsTypes["self"] = className
+    
+    // Process method parameters and add them to locals
+    for i, astParam := range method.Parameters {
+        if i+1 >= len(fn.Params) {
+            return fmt.Errorf("parameter %s not found in LLVM function parameters", astParam.Name.Value)
+        }
+        
+        // Save old value for this parameter name if it exists
+        if oldVal, exists := g.locals[astParam.Name.Value]; exists {
+            oldLocals[astParam.Name.Value] = oldVal
+        }
+        if oldType, exists := g.localsTypes[astParam.Name.Value]; exists {
+            oldTypes[astParam.Name.Value] = oldType
+        }
+        
+        llvmParam := fn.Params[i+1] // i+1 because 0 is self
 
-		// Allocate space for the parameter
-		paramAlloca := entryBlock.NewAlloca(llvmParam.Type())
-		entryBlock.NewStore(llvmParam, paramAlloca)
+        // Allocate space for the parameter
+        paramAlloca := entryBlock.NewAlloca(llvmParam.Type())
+        entryBlock.NewStore(llvmParam, paramAlloca)
 
-		// Add to locals with the AST parameter name
-		g.locals[astParam.Name.Value] = paramAlloca
-		g.localsTypes[astParam.Name.Value] = astParam.Type.Value
-	}
-	
+        // Add to locals with the AST parameter name
+        g.locals[astParam.Name.Value] = paramAlloca
+        g.localsTypes[astParam.Name.Value] = astParam.Type.Value
+    }
+    
+    // Ensure all class attributes are added to locals (but don't override parameters)
+    classInfo := g.classTable[className]
+    for _, attr := range classInfo.Attributes {
+        // Skip if a parameter with this name already exists
+        if _, exists := g.locals[attr.Name]; exists && oldLocals[attr.Name] == nil {
+            continue
+        }
+        
+        // Calculate field index (offset includes vtable pointer at 0)
+        fieldIndex := attr.Offset
 
-	
-	// Ensure all class attributes are added to locals
-	classInfo := g.classTable[className]
-	for _, attr := range classInfo.Attributes {
-		// Calculate field index (offset includes vtable pointer at 0)
-		fieldIndex := attr.Offset
+        // Get pointer to attribute using classType
+        attrPtr := entryBlock.NewGetElementPtr(
+            classType,
+            typedSelf,
+            constant.NewInt(types.I32, 0),
+            constant.NewInt(types.I32, int64(fieldIndex)),
+        )
 
-		// Get pointer to attribute using classType
-		attrPtr := entryBlock.NewGetElementPtr(
-			classType,
-			typedSelf,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, int64(fieldIndex)),
-		)
+        // Store in locals using actual attribute name (if not shadowed)
+        if _, exists := g.locals[attr.Name]; !exists {
+            g.locals[attr.Name] = attrPtr
+            g.localsTypes[attr.Name] = attr.Type
+        }
+    }
 
-		// Store in locals using actual attribute name
-		g.locals[attr.Name] = attrPtr
-	}
+    value, currentBlock, err := g.generateExpression(entryBlock, method.Body)
+    if err != nil {
+        return err
+    }
 
-	value, currentBlock, err := g.generateExpression(entryBlock, method.Body)
-	if err != nil {
-		return err
-	}
+    // Ensure block termination
+    if currentBlock.Term == nil {
+        // Handle void return types
+        if method.ReturnType.Value == "Void" || method.ReturnType.Value == "Unit" {
+            currentBlock.NewRet(nil)
+        } else {
+            // Default return value if missing
+            if value == nil {
+                value = constant.NewNull(types.NewPointer(types.I8))
+            }
+            currentBlock.NewRet(value)
+        }
+    }
 
-	// Ensure block termination
-	if currentBlock.Term == nil {
-		// Handle void return types
-		if method.ReturnType.Value == "Void" || method.ReturnType.Value == "Unit" {
-			currentBlock.NewRet(nil)
-		} else {
-			// Default return value if missing
-			if value == nil {
-				value = constant.NewNull(types.NewPointer(types.I8))
-			}
-			currentBlock.NewRet(value)
-		}
-	}
+    // Add explicit terminator for entry block if needed
+    if entryBlock.Term == nil {
+        entryBlock.NewBr(currentBlock)
+    }
+    
+    // Restore original locals
+    for name, val := range oldLocals {
+        g.locals[name] = val
+    }
+    for name, typ := range oldTypes {
+        g.localsTypes[name] = typ
+    }
 
-	// Add explicit terminator for entry block if needed
-	if entryBlock.Term == nil {
-		entryBlock.NewBr(currentBlock)
-	}
-
-	return nil
+    return nil
 }

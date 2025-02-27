@@ -1,5 +1,5 @@
 class Main inherits IO {
-    a : Int;
+    a: Int;
         gcd_iterative(a: Int, b: Int): Int {    
             let temp: Int <- 0, x: Int <- a, y: Int <- b in {    
                 while 0 < y loop {      
@@ -47,9 +47,12 @@ class Main inherits IO {
             out_string("Recursive GCD(175,44) = ");
             out_int(gcd_recursive(175,44));
             out_string("\n");
-            out_string("Enter a number");
+            out_string("Enter a number: \n");
             a <- in_int();
+            out_string("your name a number: ");
             out_int(a);
+                        out_string("\n");
+
 
         }
     };
