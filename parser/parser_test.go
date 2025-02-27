@@ -342,27 +342,30 @@ func TestParserErrors(t *testing.T) {
 	tests := []struct {
 		input          string
 		expectedErrors int
-		expectedErrMsg string
+		expectedErrMsg []string
 	}{
 		{
 			// Missing semicolon after class
 			`class Test {}`,
 			1,
-			"Expected next token to be SEMI",
+			[]string{"Expected next token to be SEMI"},
 		},
 		{
 			// Invalid class declaration
 			`class {};`,
 			1,
-			"Expected next token to be TYPEID",
+			[]string{"Expected next token to be TYPEID"},
 		},
 		{
 			// Invalid method declaration
 			`class Test {
 				method(: Int { 42 };
 			};`,
-			1,
-			"Expected next token to be OBJECTID",
+			2,
+			[]string{
+				"Expected parameter name",
+				"Expected next token to be SEMI",
+			},
 		},
 		{
 			// Invalid let binding
@@ -371,8 +374,22 @@ func TestParserErrors(t *testing.T) {
 					let Int <- 5 in x
 				};
 			};`,
-			1,
-			"Expected next token to be OBJECTID",
+			2,
+			[]string{
+				"Expected next token to be OBJECTID",
+				"Expected next token to be SEMI",
+			},
+		},
+		{
+			// Invalid method parameter syntax
+			`class Test {
+				method(): Int (x:) { 42 };
+			};`,
+			2,
+			[]string{
+				"Expected next token to be LBRACE",
+				"Expected next token to be SEMI",
+			},
 		},
 	}
 
@@ -382,13 +399,17 @@ func TestParserErrors(t *testing.T) {
 		errors := p.Errors()
 
 		if len(errors) != tt.expectedErrors {
-			t.Errorf("expected %d errors, got %d", tt.expectedErrors, len(errors))
+			t.Errorf("expected %d errors, got %d for input:\n%s\nErrors: %v",
+				tt.expectedErrors, len(errors), tt.input, errors)
 			continue
 		}
 
-		if len(errors) > 0 && !strings.Contains(errors[0], tt.expectedErrMsg) {
-			t.Errorf("expected error message to contain %q, got %q",
-				tt.expectedErrMsg, errors[0])
+		// Check each expected error message
+		for i, expectedMsg := range tt.expectedErrMsg {
+			if i < len(errors) && !strings.Contains(errors[i], expectedMsg) {
+				t.Errorf("expected error message to contain %q, got %q\nfor input:\n%s",
+					expectedMsg, errors[i], tt.input)
+			}
 		}
 	}
 }
