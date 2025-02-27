@@ -14,65 +14,6 @@ import (
 	"github.com/llir/llvm/ir/value"
 )
 
-// Resolve the receiver object and type for a method call
-func (g *CodeGenerator) resolveMethodReceiver(block *ir.Block, e *ast.MethodCall) (receiverObj value.Value, receiverType string, resultBlock *ir.Block, err error) {
-	resultBlock = block
-	
-	if e.Object == nil {
-		// Implicit "self" receiver
-		receiverObj = g.locals["$self"]
-		receiverType = g.currentClass
-		return
-	}
-	
-	// Generate code for the receiver expression
-	receiverObj, resultBlock, err = g.generateExpression(resultBlock, e.Object)
-	if err != nil {
-		return
-	}
-	
-	if e.Type != nil {
-		receiverType = e.Type.Value
-		// Cast receiver to static type's class
-		if classType, exists := g.classTypes[receiverType]; exists {
-			receiverObj = resultBlock.NewBitCast(receiverObj, types.NewPointer(classType))
-		} else {
-			err = fmt.Errorf("static type %s not found", receiverType)
-			return
-		}
-	}
-
-	// Determine receiver type based on expression
-	switch expr := e.Object.(type) {
-	case *ast.NewExpression:
-		receiverType = expr.Type.Value
-	case *ast.ObjectIdentifier:
-		// First check if it's a class attribute
-		if classInfo, exists := g.classTable[g.currentClass]; exists {
-			for _, attr := range classInfo.Attributes {
-				if attr.Name == expr.Value {
-					receiverType = attr.Type
-					break
-				}
-			}
-		}
-
-		// If not found as attribute, check local variables
-		if receiverType == "" {
-			var exists bool
-			receiverType, exists = g.localsTypes[expr.Value]
-			if !exists {
-				err = fmt.Errorf("undefined variable: %s", expr.Value)
-				return
-			}
-		}
-	default:
-		err = fmt.Errorf("unsupported receiver expression: %T", e.Object)
-		return
-	}
-	
-	return
-}
 
 // Handle special methods (type_name, copy)
 func (g *CodeGenerator) handleSpecialMethods(block *ir.Block, e *ast.MethodCall, receiverObj value.Value, receiverType string) (result value.Value, resultBlock *ir.Block, handled bool, err error) {
@@ -280,49 +221,77 @@ func (g *CodeGenerator) boxInt(block *ir.Block, intVal value.Value) (value.Value
 	// Return boxed object
 	return block.NewBitCast(intObj, i8Ptr), block, nil
 }
-
 // Box a boolean value
 func (g *CodeGenerator) boxBool(block *ir.Block, boolVal value.Value) (value.Value, *ir.Block, error) {
-	boolType := g.classTypes["Bool"]
-	if boolType == nil {
-		return nil, block, fmt.Errorf("bool type not found in class types")
-	}
+    boolType := g.classTypes["Bool"]
+    if boolType == nil {
+        return nil, block, fmt.Errorf("bool type not found in class types")
+    }
 
-	boolObj := block.NewAlloca(boolType)
+    boolObj := block.NewAlloca(boolType)
 
-	// Set vtable
-	vtablePtr := block.NewGetElementPtr(boolType, boolObj,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 0),
-	)
+    // Set vtable
+    vtablePtr := block.NewGetElementPtr(boolType, boolObj,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, 0),
+    )
 
-	if g.vtables["Bool"] == nil {
-		return nil, block, fmt.Errorf("bool vtable not found")
-	}
+    if g.vtables["Bool"] == nil {
+        return nil, block, fmt.Errorf("bool vtable not found")
+    }
 
-	block.NewStore(
-		block.NewBitCast(g.vtables["Bool"], i8Ptr),
-		vtablePtr,
-	)
+    block.NewStore(
+        block.NewBitCast(g.vtables["Bool"], i8Ptr),
+        vtablePtr,
+    )
 
-	// Set value field
-	valuePtr := block.NewGetElementPtr(boolType, boolObj,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 1),
-	)
-	
-	fieldType := boolType.Fields[1]
-	if fieldType.Equal(types.I32) {
-		// If Bool.val is defined as i32, extend the i1 value
-		extendedBool := block.NewZExt(boolVal, types.I32)
-		block.NewStore(extendedBool, valuePtr)
-	} else {
-		// If Bool.val is defined as i1, store directly
-		block.NewStore(boolVal, valuePtr)
-	}
+    // Set value field
+    valuePtr := block.NewGetElementPtr(boolType, boolObj,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, 1),
+    )
+    
+    // Check the type of the Bool.val field in the Bool class struct
+    fieldType := boolType.Fields[1]
+    
+    // Convert boolVal to the right type
+    if boolVal.Type() != types.I1 && boolVal.Type() != types.I8 && boolVal.Type() != types.I32 {
+        // Try to convert to boolean
+        boolVal = block.NewICmp(enum.IPredNE, boolVal, constant.NewInt(boolVal.Type().(*types.IntType), 0))
+    }
+    
+    if fieldType.Equal(types.I32) {
+        // If Bool.val is defined as i32, extend the value
+        if boolVal.Type() == types.I1 {
+            boolVal = block.NewZExt(boolVal, types.I32)
+        } else if boolVal.Type() == types.I8 {
+            boolVal = block.NewZExt(boolVal, types.I32)
+        }
+        block.NewStore(boolVal, valuePtr)
+    } else if fieldType.Equal(types.I8) {
+        // If Bool.val is defined as i8, convert as needed
+        if boolVal.Type() == types.I1 {
+            boolVal = block.NewZExt(boolVal, types.I8)
+        } else if boolVal.Type() == types.I32 {
+            // First convert to i1, then to i8
+            boolVal = block.NewICmp(enum.IPredNE, boolVal, constant.NewInt(types.I32, 0))
+            boolVal = block.NewZExt(boolVal, types.I8)
+        }
+        block.NewStore(boolVal, valuePtr)
+    } else if fieldType.Equal(types.I1) {
+        // If Bool.val is defined as i1, convert to i1 if needed
+        if boolVal.Type() == types.I8 {
+            boolVal = block.NewICmp(enum.IPredNE, boolVal, constant.NewInt(types.I8, 0))
+        } else if boolVal.Type() == types.I32 {
+            boolVal = block.NewICmp(enum.IPredNE, boolVal, constant.NewInt(types.I32, 0))
+        }
+        block.NewStore(boolVal, valuePtr)
+    } else {
+        return nil, block, fmt.Errorf("unexpected field type for Bool.val: %v", fieldType)
+    }
 
-	// Return boxed object
-	return block.NewBitCast(boolObj, i8Ptr), block, nil
+    // Return boxed object
+    return block.NewBitCast(boolObj, i8Ptr), block, nil
 }
 
 // Setup null check for an object
@@ -733,7 +702,6 @@ func (g *CodeGenerator) getOrCreateMalloc() *ir.Func {
 	return g.module.NewFunc("malloc", types.I8Ptr, ir.NewParam("size", types.I64))
 }
 func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value, attrType string, initExpr ast.Expression) (*ir.Block, error) {
-
 	// Get the destination type
 	destType := attrPtr.Type().(*types.PointerType).ElemType
 
@@ -781,6 +749,31 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
 			return currentBlock, nil
 		}
 
+		// Type conversion for boolean fields
+		if destType == types.I8 && val.Type() == types.I1 {
+            // Convert i1 to i8 for boolean fields
+            val = currentBlock.NewZExt(val, types.I8)
+        } else if destType == types.I1 && val.Type() == types.I8 {
+            // Convert i8 to i1 if needed
+            val = currentBlock.NewTrunc(val, types.I1)
+        } else if destType == types.I32 && (val.Type() == types.I1 || val.Type() == types.I8) {
+            // Convert boolean to int by zero-extending
+            val = currentBlock.NewZExt(val, types.I32)
+        } else if (destType == types.I1 || destType == types.I8) && val.Type() == types.I32 {
+            // Convert int to boolean by comparing with 0
+            val = currentBlock.NewICmp(enum.IPredNE, val, constant.NewInt(types.I32, 0))
+            if destType == types.I8 {
+                val = currentBlock.NewZExt(val, types.I8)
+            }
+        } else if !val.Type().Equal(destType) {
+            // For other type mismatches, try to use bit casting if both are pointer types
+            if types.IsPointer(val.Type()) && types.IsPointer(destType) {
+                val = currentBlock.NewBitCast(val, destType)
+            } else {
+                return currentBlock, fmt.Errorf("incompatible types: %v and %v", val.Type(), destType)
+            }
+        }
+
 		currentBlock.NewStore(val, attrPtr)
 		return currentBlock, nil
 	}
@@ -789,10 +782,13 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
 	var defaultVal value.Value
 	switch strings.ToLower(attrType) {
 	case "int":
-
 		defaultVal = constant.NewInt(types.I32, 0)
 	case "bool":
-		defaultVal = constant.NewInt(types.I1, 0)
+		if destType == types.I8 {
+            defaultVal = constant.NewInt(types.I8, 0)
+        } else {
+            defaultVal = constant.NewInt(types.I1, 0) 
+        }
 	case "string":
 		// Create empty string
 		stringType := g.classTypes["String"]
@@ -828,12 +824,33 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
 
 	// Cast the default value to the correct type if needed
 	destPtrType := attrPtr.Type().(*types.PointerType)
-	if !defaultVal.Type().Equal(destPtrType.ElemType) {
-		defaultVal = block.NewBitCast(defaultVal, destPtrType.ElemType)
-	}
+    if !defaultVal.Type().Equal(destPtrType.ElemType) {
+        if destPtrType.ElemType == types.I8 && defaultVal.Type() == types.I1 {
+            // Convert i1 to i8
+            defaultVal = block.NewZExt(defaultVal, types.I8)
+        } else if destPtrType.ElemType == types.I1 && defaultVal.Type() == types.I8 {
+            // Convert i8 to i1
+            defaultVal = block.NewTrunc(defaultVal, types.I1)
+        } else if destPtrType.ElemType == types.I32 && defaultVal.Type() == types.I1 {
+            // Convert boolean to int
+            defaultVal = block.NewZExt(defaultVal, types.I32)
+        } else if (destPtrType.ElemType == types.I1 || destPtrType.ElemType == types.I8) && defaultVal.Type() == types.I32 {
+            // Convert int to boolean
+            defaultVal = block.NewICmp(enum.IPredNE, defaultVal, constant.NewInt(types.I32, 0))
+            if destPtrType.ElemType == types.I8 {
+                defaultVal = block.NewZExt(defaultVal, types.I8)
+            }
+        } else if types.IsPointer(defaultVal.Type()) && types.IsPointer(destPtrType.ElemType) {
+            // Cast between pointer types
+            defaultVal = block.NewBitCast(defaultVal, destPtrType.ElemType)
+        } else {
+            return block, fmt.Errorf("cannot initialize %s attribute: incompatible types %v and %v", 
+                                    attrType, defaultVal.Type(), destPtrType.ElemType)
+        }
+    }
 
-	block.NewStore(defaultVal, attrPtr)
-	return block, nil
+    block.NewStore(defaultVal, attrPtr)
+    return block, nil
 }
 
 func (g *CodeGenerator) getOrCreateStringConstant(name string) *ir.Global {
@@ -871,23 +888,46 @@ func (g *CodeGenerator) typeID(typeName string) int {
 		return 0
 	}
 }
-
 func (g *CodeGenerator) convertType(typeName string) types.Type {
-	switch strings.ToLower(typeName) {
-	case "int":
-		return types.I32
-	case "bool":
-		return  types.I1
-	default:
-		// For user-defined types, pointer to their struct type
-		if classType, exists := g.classTypes[typeName]; exists {
-			return types.NewPointer(classType)
-		} else {
-			return  i8Ptr 
-		}
-	}
+    switch strings.ToLower(typeName) {
+    case "int":
+        return types.I32
+    case "bool":
+        // Use i8 instead of i1 for better memory alignment
+        return types.I8
+    default:
+        // For user-defined types, pointer to their struct type
+        if classType, exists := g.classTypes[typeName]; exists {
+            return types.NewPointer(classType)
+        } else {
+            return i8Ptr
+        }
+    }
 }
+func (g *CodeGenerator) generateIOMethodCall(block *ir.Block, methodName string, selfObj value.Value, args ...value.Value) (value.Value, *ir.Block, error) {
+    // Cast the self pointer to i8* if needed
+    var selfPtr value.Value
+    if _, ok := selfObj.Type().(*types.PointerType); ok {
+        selfPtr = block.NewBitCast(selfObj, types.I8Ptr)
+    } else {
+        return nil, block, fmt.Errorf("expected pointer type for self, got %v", selfObj.Type())
+    }
 
+    // Get the method function
+    methodFunc := g.methods[fmt.Sprintf("IO_%s", methodName)]
+    if methodFunc == nil {
+        return nil, block, fmt.Errorf("IO method %s not found", methodName)
+    }
+
+    // Create argument list starting with self
+    allArgs := make([]value.Value, 0, len(args)+1)
+    allArgs = append(allArgs, selfPtr)
+    allArgs = append(allArgs, args...)
+
+    // Call the method
+    result := block.NewCall(methodFunc, allArgs...)
+    return result, block, nil
+}
 
 
 func (g *CodeGenerator) getTypeDepth(typeName string) int {
@@ -914,4 +954,34 @@ func (g *CodeGenerator) GetModule() *ir.Module {
 
 func (g *CodeGenerator) GetVTables() map[string]*ir.Global {
 	return g.vtables
+}
+
+
+// Add this to your helpers.go file
+func (g *CodeGenerator) processStringLiteral(value string) string {
+    // Handle escape sequences
+    processed := strings.Builder{}
+    for i := 0; i < len(value); i++ {
+        if value[i] == '\\' && i+1 < len(value) {
+            // Handle escape sequence
+            switch value[i+1] {
+            case 'n':
+                processed.WriteByte('\n')
+            case 't':
+                processed.WriteByte('\t')
+            case '\\':
+                processed.WriteByte('\\')
+            case '"':
+                processed.WriteByte('"')
+            default:
+                // For non-standard escape sequences like \H, 
+                // just include the character (H in this case)
+                processed.WriteByte(value[i+1])
+            }
+            i++ // Skip the next character as it's part of the escape sequence
+        } else {
+            processed.WriteByte(value[i])
+        }
+    }
+    return processed.String()
 }

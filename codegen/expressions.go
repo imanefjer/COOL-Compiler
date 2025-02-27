@@ -22,11 +22,18 @@ func (g *CodeGenerator) generateExpression(block *ir.Block, expr ast.Expression)
 		return constant.NewInt(types.I32, int64(e.Value)), block, nil
 
 	case *ast.BooleanLiteral:
-		
-		if e.Value {
-			return constant.NewInt(types.I1, 1), block, nil
+		boolType := g.convertType("Bool")
+		if boolType == types.I8 {
+			if e.Value {
+				return constant.NewInt(types.I8, 1), block, nil
+			}
+			return constant.NewInt(types.I8, 0), block, nil
+		} else {
+			if e.Value {
+				return constant.NewInt(types.I1, 1), block, nil
+			}
+			return constant.NewInt(types.I1, 0), block, nil
 		}
-		return constant.NewInt(types.I1, 0), block, nil
 
 	case *ast.CaseExpression:
 		return g.generateCaseExpression(block, e)
@@ -148,171 +155,280 @@ func (g *CodeGenerator) generateCaseExpression(block *ir.Block, e *ast.CaseExpre
 		return constant.NewNull(types.NewPointer(types.I8)), endBlock, nil
 	}
 }
-
 func (g *CodeGenerator) generateStringLiteral(block *ir.Block, e *ast.StringLiteral) (value.Value, *ir.Block, error) {
-	// Ensure null termination
-	strWithNull := e.Value + "\x00"
-	strGlobal := g.getOrCreateStringConstant(strWithNull)
+    // Process escape sequences
+    processedStr := g.processStringLiteral(e.Value)
+    
+    // Ensure null termination
+    strWithNull := processedStr + "\x00"
+    strGlobal := g.getOrCreateStringConstant(strWithNull)
 
-	// Get pointer to first character
-	arrType := types.NewArray(uint64(len(strWithNull)), types.I8)
-	strPtr := block.NewGetElementPtr(arrType, strGlobal,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 0),
-	)
+    // Get pointer to first character
+    arrType := types.NewArray(uint64(len(strWithNull)), types.I8)
+    strPtr := block.NewGetElementPtr(arrType, strGlobal,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, 0),
+    )
 
-	// Allocate String object on the heap
-	mallocFunc := g.getOrCreateMalloc()
-	stringSize := constant.NewInt(types.I64, 16) // Size of String struct
-	stringObjMem := block.NewCall(mallocFunc, stringSize)
-	stringObj := block.NewBitCast(stringObjMem, types.NewPointer(g.classTypes["String"]))
+    // Allocate String object on the heap
+    mallocFunc := g.getOrCreateMalloc()
+    stringSize := constant.NewInt(types.I64, 16) // Size of String struct
+    stringObjMem := block.NewCall(mallocFunc, stringSize)
+    stringObj := block.NewBitCast(stringObjMem, types.NewPointer(g.classTypes["String"]))
 
-	// Initialize vtable
-	vtablePtr := block.NewGetElementPtr(g.classTypes["String"], stringObj,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 0),
-	)
-	block.NewStore(
-		block.NewBitCast(g.vtables["String"], i8Ptr),
-		vtablePtr,
-	)
+    // Initialize vtable
+    vtablePtr := block.NewGetElementPtr(g.classTypes["String"], stringObj,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, 0),
+    )
+    block.NewStore(
+        block.NewBitCast(g.vtables["String"], i8Ptr),
+        vtablePtr,
+    )
 
-	// Set value field
-	valuePtr := block.NewGetElementPtr(g.classTypes["String"], stringObj,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 1),
-	)
-	block.NewStore(strPtr, valuePtr)
+    // Set value field
+    valuePtr := block.NewGetElementPtr(g.classTypes["String"], stringObj,
+        constant.NewInt(types.I32, 0),
+        constant.NewInt(types.I32, 1),
+    )
+    block.NewStore(strPtr, valuePtr)
 
-	return stringObj, block, nil
+    return stringObj, block, nil
 }
-
 func (g *CodeGenerator) generateInfixExpression(block *ir.Block, e *ast.InfixExpression) (value.Value, *ir.Block, error) {
-		// Generate code for left and right expressions
-		left, leftBlock, err := g.generateExpression(block, e.Left)
-		if err != nil {
-			return nil, leftBlock, err
-		}
+    // Generate code for left and right expressions
+    left, leftBlock, err := g.generateExpression(block, e.Left)
+    if err != nil {
+        return nil, leftBlock, err
+    }
 
-		right, rightBlock, err := g.generateExpression(leftBlock, e.Right)
-		if err != nil {
-			return nil, rightBlock, err
-		}
+    right, rightBlock, err := g.generateExpression(leftBlock, e.Right)
+    if err != nil {
+        return nil, rightBlock, err
+    }
 
-		// Handle different operators
-		switch e.Operator {
-		case "+":
-			return rightBlock.NewAdd(left, right), rightBlock, nil
-		case "-":
-			return rightBlock.NewSub(left, right), rightBlock, nil
-		case "*":
-			return rightBlock.NewMul(left, right), rightBlock, nil
-		case "/":
-			return rightBlock.NewSDiv(left, right), rightBlock, nil
-		case "<":
-			cmp := rightBlock.NewICmp(enum.IPredSLT, left, right)
-			return rightBlock.NewZExt(cmp, types.I32), rightBlock, nil
-		case "=":
-			cmp := rightBlock.NewICmp(enum.IPredEQ, left, right)
-			return rightBlock.NewZExt(cmp, types.I32), rightBlock, nil
-		default:
-			return nil, rightBlock, fmt.Errorf("unsupported operator: %s", e.Operator)
-		}
+    if !left.Type().Equal(right.Type()) {
+        if left.Type() == types.I1 && right.Type() == types.I8 {
+            left = rightBlock.NewZExt(left, types.I8)
+        } else if left.Type() == types.I8 && right.Type() == types.I1 {
+            right = rightBlock.NewZExt(right, types.I8)
+        } else if left.Type() == types.I1 && right.Type() == types.I32 {
+            left = rightBlock.NewZExt(left, types.I32)
+        } else if left.Type() == types.I32 && right.Type() == types.I1 {
+            right = rightBlock.NewZExt(right, types.I32)
+        } else if left.Type() == types.I8 && right.Type() == types.I32 {
+            left = rightBlock.NewZExt(left, types.I32)
+        } else if left.Type() == types.I32 && right.Type() == types.I8 {
+            right = rightBlock.NewZExt(right, types.I32)
+        }
+    }
+
+    // Handle different operators
+    switch e.Operator {
+    case "+":
+        return rightBlock.NewAdd(left, right), rightBlock, nil
+    case "-":
+        return rightBlock.NewSub(left, right), rightBlock, nil
+    case "*":
+        return rightBlock.NewMul(left, right), rightBlock, nil
+    case "/":
+        return rightBlock.NewSDiv(left, right), rightBlock, nil
+    case "<":
+        // For comparisons, return as appropriate bool type
+        result := rightBlock.NewICmp(enum.IPredSLT, left, right)
+        boolType := g.convertType("Bool")
+        if boolType == types.I8 && result.Type() == types.I1 {
+            return rightBlock.NewZExt(result, types.I8), rightBlock, nil
+        }
+        return result, rightBlock, nil
+    case "<=":
+        result := rightBlock.NewICmp(enum.IPredSLE, left, right)
+        boolType := g.convertType("Bool")
+        if boolType == types.I8 && result.Type() == types.I1 {
+            return rightBlock.NewZExt(result, types.I8), rightBlock, nil
+        }
+        return result, rightBlock, nil
+    case "=":
+        result := rightBlock.NewICmp(enum.IPredEQ, left, right)
+        boolType := g.convertType("Bool")
+        if boolType == types.I8 && result.Type() == types.I1 {
+            return rightBlock.NewZExt(result, types.I8), rightBlock, nil
+        }
+        return result, rightBlock, nil
+    default:
+        return nil, rightBlock, fmt.Errorf("unsupported operator: %s", e.Operator)
+    }
 }
 
+// Find this function in expressions.go 
 func (g *CodeGenerator) generateIfExpression(block *ir.Block, e *ast.IfExpression) (value.Value, *ir.Block, error) {
+    // Generate unique labels using the expression pointer
+    labelSuffix := fmt.Sprintf("%p", e)
+    
+    cond, currentBlock, err := g.generateExpression(block, e.Condition)
+    if err != nil {
+        return nil, nil, err
+    }
+    
+    if cond.Type() != types.I1 {
+        cond = currentBlock.NewICmp(enum.IPredNE, cond, constant.NewInt(types.I32, 0))
+    }
+    
+    thenBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("if.then.%s", labelSuffix))
+    elseBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("if.else.%s", labelSuffix))
+    mergeBlock := currentBlock.Parent.NewBlock(fmt.Sprintf("if.merge.%s", labelSuffix))
 
-	cond, currentBlock, err := g.generateExpression(block, e.Condition)
-	if err != nil {
-		return nil, nil, err
-	}
-	if cond.Type() != types.I1 {
-		cond = currentBlock.NewICmp(enum.IPredNE, cond, constant.NewInt(types.I32, 0))
-	}
-	thenBlock := currentBlock.Parent.NewBlock("if.then")
-	elseBlock := currentBlock.Parent.NewBlock("if.else")
-	mergeBlock := currentBlock.Parent.NewBlock("if.merge")
+    currentBlock.NewCondBr(cond, thenBlock, elseBlock)
 
-	currentBlock.NewCondBr(cond, thenBlock, elseBlock)
+    thenVal, thenCurrentBlock, err := g.generateExpression(thenBlock, e.Consequence)
+    if err != nil {
+        return nil, nil, err
+    }
+    thenCurrentBlock.NewBr(mergeBlock)
 
-	thenVal, thenCurrentBlock, err := g.generateExpression(thenBlock, e.Consequence)
-	if err != nil {
-		return nil, nil, err
-	}
-	thenCurrentBlock.NewBr(mergeBlock)
+    elseVal, elseCurrentBlock, err := g.generateExpression(elseBlock, e.Alternative)
+    if err != nil {
+        return nil, nil, err
+    }
+    elseCurrentBlock.NewBr(mergeBlock)
 
-	elseVal, elseCurrentBlock, err := g.generateExpression(elseBlock, e.Alternative)
-	if err != nil {
-		return nil, nil, err
-	}
-	elseCurrentBlock.NewBr(mergeBlock)
-
-	// Ensure both incoming values have the same type.
-	if !thenVal.Type().Equal(elseVal.Type()) {
-		elseVal = mergeBlock.NewBitCast(elseVal, thenVal.Type())
-	}
-	phi := mergeBlock.NewPhi(ir.NewIncoming(thenVal, thenBlock), ir.NewIncoming(elseVal, elseBlock))
-	return phi, mergeBlock, nil
+    // FIX HERE: Check if any of the values is an integer and we're expecting a pointer
+    if (thenVal.Type() == types.I32 || elseVal.Type() == types.I32) && 
+       (types.IsPointer(thenVal.Type()) || types.IsPointer(elseVal.Type())) {
+        // If one value is an integer and other is a pointer, use null pointer instead of trying to cast the integer
+        if thenVal.Type() == types.I32 && types.IsPointer(elseVal.Type()) {
+            // If then-branch is integer, replace with null pointer of the same type as else-branch
+            if ptrType, ok := elseVal.Type().(*types.PointerType); ok {
+                thenVal = constant.NewNull(ptrType)
+            }
+        } else if elseVal.Type() == types.I32 && types.IsPointer(thenVal.Type()) {
+            // If else-branch is integer, replace with null pointer of the same type as then-branch
+            if ptrType, ok := thenVal.Type().(*types.PointerType); ok {
+                elseVal = constant.NewNull(ptrType)
+            }
+        }
+    }
+    
+    // Ensure both incoming values have the same type.
+    if !thenVal.Type().Equal(elseVal.Type()) {
+        // Try to use bitcast only if both are pointer types
+        if types.IsPointer(thenVal.Type()) && types.IsPointer(elseVal.Type()) {
+            elseVal = mergeBlock.NewBitCast(elseVal, thenVal.Type())
+        } else {
+            // If they can't be made compatible, use a default value
+            return nil, nil, fmt.Errorf("incompatible types in if branches: %v and %v", thenVal.Type(), elseVal.Type())
+        }
+    }
+    
+    phi := mergeBlock.NewPhi(
+        ir.NewIncoming(thenVal, thenCurrentBlock),
+        ir.NewIncoming(elseVal, elseCurrentBlock),
+    )
+    
+    return phi, mergeBlock, nil
 }
 
 func (g *CodeGenerator) generateLetExpression(block *ir.Block, e *ast.LetExpression) (value.Value, *ir.Block, error) {
-		llvmType := g.convertType(e.Type.Value)
-		// Allocate storage for the let variable
-		varAlloca := block.NewAlloca(llvmType)
-
-		// Generate the initialization expression
-		initValue, initBlock, err := g.generateExpression(block, e.Init)
-		if err != nil {
-			return nil, initBlock, err
-		}
-
-		// Cast the value to the correct type if needed
-		var valueToStore value.Value
-		if initValue.Type().Equal(llvmType) {
-			valueToStore = initValue
-		} else if types.IsPointer(llvmType) && types.IsPointer(initValue.Type()) {
-			// If both types are pointers, bitcast to the target type
-			valueToStore = initBlock.NewBitCast(initValue, llvmType)
-		} else {
-			// If types don't match and aren't both pointers, this is an error
-			return nil, initBlock, fmt.Errorf("type mismatch in let expression: got %v, expected %v",
-				initValue.Type(), llvmType)
-		}
-
-		// Store the value
-		initBlock.NewStore(valueToStore, varAlloca)
-
-		// Save any previous binding and update locals
-		oldValue, exists := g.locals[e.Name.Value]
-		g.locals[e.Name.Value] = varAlloca
-
-		// NEW: Record the variable's type in localsTypes
-		oldType, typeExists := g.localsTypes[e.Name.Value]
-		g.localsTypes[e.Name.Value] = e.Type.Value
-
-		// Generate code for the let body
-		bodyValue, bodyBlock, err := g.generateExpression(initBlock, e.Body)
-		if err != nil {
-			return nil, bodyBlock, err
-		}
-
-		// Restore the old binding if it existed
-		if exists {
-			g.locals[e.Name.Value] = oldValue
-		} else {
-			delete(g.locals, e.Name.Value)
-		}
-
-		// NEW: Restore the old type
-		if typeExists {
-			g.localsTypes[e.Name.Value] = oldType
-		} else {
-			delete(g.localsTypes, e.Name.Value)
-		}
-
-		return bodyValue, bodyBlock, nil
-	}
-
+    // Save original environment to restore later
+    originalLocals := make(map[string]value.Value)
+    originalTypes := make(map[string]string)
+    for k, v := range g.locals {
+        originalLocals[k] = v
+    }
+    for k, v := range g.localsTypes {
+        originalTypes[k] = v
+    }
+    
+    currentBlock := block
+    
+    // Process the first binding
+    llvmType := g.convertType(e.Type.Value)
+    varAlloca := currentBlock.NewAlloca(llvmType)
+    
+    // Generate initialization for first binding
+    if e.Init != nil {
+        initValue, initBlock, err := g.generateExpression(currentBlock, e.Init)
+        if err != nil {
+            return nil, initBlock, err
+        }
+        currentBlock = initBlock
+        
+        // Cast if needed
+        var valueToStore value.Value
+        if initValue.Type().Equal(llvmType) {
+            valueToStore = initValue
+        } else if types.IsPointer(llvmType) && types.IsPointer(initValue.Type()) {
+            valueToStore = currentBlock.NewBitCast(initValue, llvmType)
+        } else {
+            return nil, currentBlock, fmt.Errorf("type mismatch in let declaration: got %v, expected %v",
+                initValue.Type(), llvmType)
+        }
+        
+        currentBlock.NewStore(valueToStore, varAlloca)
+    } else {
+        // Default initialization
+        var err error
+        currentBlock, err = g.initializeAttribute(currentBlock, varAlloca, e.Type.Value, nil)
+        if err != nil {
+            return nil, currentBlock, err
+        }
+    }
+    
+    // Add first binding to environment
+    g.locals[e.Name.Value] = varAlloca
+    g.localsTypes[e.Name.Value] = e.Type.Value
+    
+    // Process additional bindings if they exist
+    for _, binding := range e.Bindings {
+        bindingType := g.convertType(binding.Type.Value)
+        bindingAlloca := currentBlock.NewAlloca(bindingType)
+        
+        // Generate initialization for additional binding
+        if binding.Init != nil {
+            initValue, initBlock, err := g.generateExpression(currentBlock, binding.Init)
+            if err != nil {
+                return nil, initBlock, err
+            }
+            currentBlock = initBlock
+            
+            // Cast if needed
+            var valueToStore value.Value
+            if initValue.Type().Equal(bindingType) {
+                valueToStore = initValue
+            } else if types.IsPointer(bindingType) && types.IsPointer(initValue.Type()) {
+                valueToStore = currentBlock.NewBitCast(initValue, bindingType)
+            } else {
+                return nil, currentBlock, fmt.Errorf("type mismatch in let binding: got %v, expected %v",
+                    initValue.Type(), bindingType)
+            }
+            
+            currentBlock.NewStore(valueToStore, bindingAlloca)
+        } else {
+            // Default initialization
+            var err error
+            currentBlock, err = g.initializeAttribute(currentBlock, bindingAlloca, binding.Type.Value, nil)
+            if err != nil {
+                return nil, currentBlock, err
+            }
+        }
+        
+        // Add binding to environment
+        g.locals[binding.Name.Value] = bindingAlloca
+        g.localsTypes[binding.Name.Value] = binding.Type.Value
+    }
+    
+    // Generate body with all bindings in scope
+    bodyValue, bodyBlock, err := g.generateExpression(currentBlock, e.Body)
+    if err != nil {
+        return nil, bodyBlock, err
+    }
+    
+    // Restore original environment
+    g.locals = originalLocals
+    g.localsTypes = originalTypes
+    
+    return bodyValue, bodyBlock, nil
+}
 func (g *CodeGenerator) generateObjectIdentifier(block *ir.Block, e *ast.ObjectIdentifier) (value.Value, *ir.Block, error) {
 
 	if e.Value == "self" {
@@ -380,10 +496,14 @@ func (g *CodeGenerator) generateObjectIdentifier(block *ir.Block, e *ast.ObjectI
 }
 
 func (g *CodeGenerator) generateWhileExpression(block *ir.Block, e *ast.WhileExpression) (value.Value, *ir.Block, error) {
+	// Generate unique names for blocks to avoid conflicts in nested loops
+	condBlockName := fmt.Sprintf("while.%p.cond", e)
+	bodyBlockName := fmt.Sprintf("while.%p.body", e)
+	endBlockName := fmt.Sprintf("while.%p.end", e)
 
-	condBlock := block.Parent.NewBlock("while.cond")
-	bodyBlock := block.Parent.NewBlock("while.body")
-	mergeBlock := block.Parent.NewBlock("while.end")
+	condBlock := block.Parent.NewBlock(condBlockName)
+	bodyBlock := block.Parent.NewBlock(bodyBlockName)
+	endBlock := block.Parent.NewBlock(endBlockName)
 
 	// Branch to condition block
 	block.NewBr(condBlock)
@@ -402,8 +522,8 @@ func (g *CodeGenerator) generateWhileExpression(block *ir.Block, e *ast.WhileExp
 		condValue = condEndBlock.NewICmp(enum.IPredNE, condition, constant.NewInt(types.I32, 0))
 	}
 
-	// Conditional branch: if true go to body, if false go to merge
-	condEndBlock.NewCondBr(condValue, bodyBlock, mergeBlock)
+	// Conditional branch: if true go to body, if false go to end
+	condEndBlock.NewCondBr(condValue, bodyBlock, endBlock)
 
 	// Generate body code
 	_, bodyEndBlock, err := g.generateExpression(bodyBlock, e.Body)
@@ -416,7 +536,7 @@ func (g *CodeGenerator) generateWhileExpression(block *ir.Block, e *ast.WhileExp
 
 	// Return 0 as result (while always returns 0 in COOL)
 	result := constant.NewInt(types.I32, 0)
-	return result, mergeBlock, nil
+	return result, endBlock, nil
 }
 
 func (g *CodeGenerator) generateFunctionCall(block *ir.Block, e *ast.FunctionCall) (value.Value, *ir.Block, error) {
@@ -586,21 +706,25 @@ func (g *CodeGenerator) generateIsVoidExpression(block *ir.Block, e *ast.IsVoidE
 }
 
 func (g *CodeGenerator) generateBlockExpression(block *ir.Block, e *ast.BlockExpression) (value.Value, *ir.Block, error) {
-	var lastValue value.Value
-		currentBlock := block
-
-		// Generate code for each expression in sequence
-		for _, expr := range e.Expressions {
-			var err error
-			lastValue, currentBlock, err = g.generateExpression(currentBlock, expr)
-			if err != nil {
-				return nil, currentBlock, err
-			}
-		}
-
-		// Return the value of the last expression
-		return lastValue, currentBlock, nil
-	}
+    var lastValue value.Value
+    currentBlock := block
+    
+    // Generate code for each expression in sequence
+    for _, expr := range e.Expressions {
+        var err error
+        var exprValue value.Value
+        
+        exprValue, currentBlock, err = g.generateExpression(currentBlock, expr)
+        if err != nil {
+            return nil, currentBlock, err
+        }
+        
+        lastValue = exprValue
+    }
+    
+    // Return the value of the last expression
+    return lastValue, currentBlock, nil
+}
 
 func (g *CodeGenerator) generateAssignment(block *ir.Block, e *ast.Assignment) (value.Value, *ir.Block, error) {
 	// Generate the value to assign
@@ -638,19 +762,118 @@ func (g *CodeGenerator) generateAssignment(block *ir.Block, e *ast.Assignment) (
 	return value, valueBlock, nil
 }
 
-// Extract method call handling to a separate function
 func (g *CodeGenerator) generateMethodCall(block *ir.Block, e *ast.MethodCall) (value.Value, *ir.Block, error) {
-	// Get receiver object and type
-	receiverObj, receiverType, block, err := g.resolveMethodReceiver(block, e)
-	if err != nil {
-		return nil, block, err
-	}
-	
-	// Handle special methods
-	if result, newBlock, handled, err := g.handleSpecialMethods(block, e, receiverObj, receiverType); handled {
-		return result, newBlock, err
-	}
-	
-	// Handle regular method calls
-	return g.generateRegularMethodCall(block, e, receiverObj, receiverType)
+    // Get receiver object and type
+    receiverObj, receiverType, block, err := g.resolveMethodReceiver(block, e)
+    if err != nil {
+        return nil, block, err
+    }
+    
+    // Handle special methods
+    if result, newBlock, handled, err := g.handleSpecialMethods(block, e, receiverObj, receiverType); handled {
+        return result, newBlock, err
+    }
+    
+    // Special handling for IO methods
+    if receiverType == "IO" || receiverType == "Main" {
+        methodName := e.Method.Value
+        switch methodName {
+        case "out_string", "out_int", "in_string", "in_int":
+            // Generate arguments
+            args := make([]value.Value, 0, len(e.Arguments))
+            currentBlock := block
+            
+            for _, arg := range e.Arguments {
+                argVal, newBlock, err := g.generateExpression(currentBlock, arg)
+                if err != nil {
+                    return nil, newBlock, err
+                }
+                currentBlock = newBlock
+                args = append(args, argVal)
+            }
+            
+            // Call IO method helper with string method name and the receiver object
+            return g.generateIOMethodCall(currentBlock, methodName, receiverObj, args...)
+        }
+    }
+    
+    // Handle regular method calls
+    return g.generateRegularMethodCall(block, e, receiverObj, receiverType)
+}
+
+// Resolve the receiver object and type for a method call
+func (g *CodeGenerator) resolveMethodReceiver(block *ir.Block, e *ast.MethodCall) (receiverObj value.Value, receiverType string, resultBlock *ir.Block, err error) {
+    resultBlock = block
+    
+    if e.Object == nil {
+        // Implicit "self" receiver
+        receiverObj = g.locals["$self"]
+        receiverType = g.currentClass
+        return
+    }
+    
+    // Generate code for the receiver expression
+    receiverObj, resultBlock, err = g.generateExpression(resultBlock, e.Object)
+    if err != nil {
+        return
+    }
+    
+    if e.Type != nil {
+        receiverType = e.Type.Value
+        // Cast receiver to static type's class
+        if classType, exists := g.classTypes[receiverType]; exists {
+            receiverObj = resultBlock.NewBitCast(receiverObj, types.NewPointer(classType))
+        } else {
+            err = fmt.Errorf("static type %s not found", receiverType)
+            return
+        }
+    }
+
+    // Determine receiver type based on expression
+    switch expr := e.Object.(type) {
+    case *ast.NewExpression:
+        receiverType = expr.Type.Value
+    case *ast.ObjectIdentifier:
+        // First check if it's a class attribute
+        if classInfo, exists := g.classTable[g.currentClass]; exists {
+            for _, attr := range classInfo.Attributes {
+                if attr.Name == expr.Value {
+                    receiverType = attr.Type
+                    break
+                }
+            }
+        }
+
+        // If not found as attribute, check local variables
+        if receiverType == "" {
+            var exists bool
+            receiverType, exists = g.localsTypes[expr.Value]
+            if !exists {
+                err = fmt.Errorf("undefined variable: %s", expr.Value)
+                return
+            }
+        }
+    case *ast.MethodCall:
+        // Method call on another method call
+        // The type of a method call is the return type of the method
+        methodName := fmt.Sprintf("%s_%s", receiverType, expr.Method.Value)
+        method := g.methods[methodName]
+        if method == nil {
+            err = fmt.Errorf("method %s not found", methodName)
+            return
+        }
+        // Use the return type of the method
+        // This is a simplification - we need to get the actual return type from the method
+        // For now, assume IO methods return SELF_TYPE
+        receiverType = "IO"  // This needs to be improved to get the actual return type
+    case *ast.FunctionCall:
+        // Function call (like out_int, out_string) typically returns SELF_TYPE in COOL
+        // The type of "self" is the current class
+        receiverType = g.currentClass
+    default:
+        err = fmt.Errorf("unsupported receiver expression: %T", e.Object)
+        return
+    }
+    
+    return
 }

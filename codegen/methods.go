@@ -544,7 +544,7 @@ func (g *CodeGenerator) generateIOOutInt(fn *ir.Func, entryBlock *ir.Block) erro
 	printf := g.getOrCreatePrintf()
 
 
-	formatGlobal := g.getOrCreateStringConstant("%d\n")
+	formatGlobal := g.getOrCreateStringConstant("%d")
 	var formatPtr value.Value
 	if arrType, ok := formatGlobal.Type().(*types.ArrayType); ok {
 		formatPtr = entryBlock.NewGetElementPtr(arrType, formatGlobal,
