@@ -4,7 +4,7 @@ class Node {
     next  : Node;   -- Pointer to the next node in the list.
     
     -- Initialize the node with a default value of 0 and set the next pointer to self.
-    init_node() : Node {
+    initNode() : Node {
         {
             value <- 0;
             next <- self;
@@ -13,25 +13,25 @@ class Node {
     };
     
     -- Return the value stored in the node.
-    get_value() : Int {
+    getValue() : Int {
         value
     };
 
+    -- Return the next node.
+    getNext() : Node {
+        next
+    };
+
     -- Set the node's value to the provided integer 'v' and return the node.
-    set_value(v : Int) : Node {
+    setValue(v : Int) : Node {
         {
             value <- v;
             self;
         }
     };
 
-    -- Return the next node.
-    get_next() : Node {
-        next
-    };
-
     -- Set the next pointer to the given node 'n' and return the current node.
-    set_next(n : Node) : Node {
+    setNext(n : Node) : Node {
         {
             next <- n;
             self;
@@ -46,53 +46,38 @@ class LinkedList inherits IO {
     -- Initialize the linked list by creating and initializing the sentinel node.
     init() : LinkedList {
         {
-            head <- new Node;
-            head.init_node();
+            head <- new Node.initNode();
             self;
         }
     };
 
     -- Add a new node at the beginning of the list with the specified value.
     addFirst(val : Int) : LinkedList {
-        let new_node : Node <- new Node in {
-            new_node.set_value(val);
-            -- Insert new_node right after the sentinel head.
-            new_node.set_next(head.get_next());
-            head.set_next(new_node);
-            self;
-        }
-    };
-
-    -- Print all values in the list.
-    print() : LinkedList {
-        let temp : Node <- head.get_next() in {
-            -- Loop until we circle back to the sentinel head.
-            while not (temp = head) loop {
-                out_int(temp.get_value());
-                out_string(" ");
-                temp <- temp.get_next();
-            } pool;
-            out_string("\n");
+        let newNode : Node <- new Node in {
+            newNode.setValue(val);
+            -- Insert newNode right after the sentinel head.
+            newNode.setNext(head.getNext());
+            head.setNext(newNode);
             self;
         }
     };
 
     -- Add a new node at the end of the list with the specified value.
     addLast(val : Int) : LinkedList {
-        let new_node : Node <- new Node,
-            temp : Node <- head in {
+        let newNode : Node <- new Node,
+            tempNode : Node <- head in {
             
-            new_node.set_value(val);
-            -- Set new_node's next pointer to head to maintain the circular structure.
-            new_node.set_next(head);
+            newNode.setValue(val);
+            -- Set newNode's next pointer to head to maintain the circular structure.
+            newNode.setNext(head);
             
             -- Traverse the list to find the last node (node whose next is head).
-            while not (temp.get_next() = head) loop {
-                temp <- temp.get_next();
+            while not (tempNode.getNext() = head) loop {
+                tempNode <- tempNode.getNext();
             } pool;
             
             -- Link the last node to the new node.
-            temp.set_next(new_node);
+            tempNode.setNext(newNode);
             self;
         }
     };
@@ -100,15 +85,15 @@ class LinkedList inherits IO {
     -- Search for a node containing the given value.
     -- Returns true if found, false otherwise.
     get(val : Int) : Bool {
-        let temp : Node <- head.get_next() in {
+        let temp : Node <- head.getNext() in {
             let found : Bool <- false in {
                 while not (temp = head) loop {
-                    if temp.get_value() = val then {
+                    if temp.getValue() = val then {
                         found <- true;
                         -- Exit loop by setting temp to head.
                         temp <- head;
                     } else {
-                        temp <- temp.get_next();
+                        temp <- temp.getNext();
                     }fi;
                 } pool;
                 found;
@@ -119,10 +104,10 @@ class LinkedList inherits IO {
     -- Return the number of nodes in the list (excluding the sentinel node).
     size() : Int {
         let count : Int <- 0 in {
-            let temp : Node <- head.get_next() in {
+            let temp : Node <- head.getNext() in {
                 while not (temp = head) loop {
                     count <- count + 1;
-                    temp <- temp.get_next();
+                    temp <- temp.getNext();
                 } pool;
             };
             count;
@@ -132,7 +117,7 @@ class LinkedList inherits IO {
     -- Check if the list is empty.
     -- The list is empty if the sentinel's next pointer points to itself.
     isEmpty() : Bool {
-        head.get_next() = head
+        head.getNext() = head
     };
 
     -- Remove the first node (immediately after the sentinel) from the list.
@@ -140,9 +125,9 @@ class LinkedList inherits IO {
         if isEmpty() then
             self  -- Nothing to remove if the list is empty.
         else
-            let first : Node <- head.get_next() in {
+            let first : Node <- head.getNext() in {
                 -- Bypass the first node by linking head directly to the second node.
-                head.set_next(first.get_next());
+                head.setNext(first.getNext());
                 self;
             }fi
     };
@@ -153,17 +138,30 @@ class LinkedList inherits IO {
             self  -- Nothing to remove if the list is empty.
         else
             let prev : Node <- head,
-                temp : Node <- head.get_next() in {
-            -- Traverse the list to find the last node (where temp.get_next() is head).
-            while not (temp.get_next() = head) loop
+                temp : Node <- head.getNext() in {
+            -- Traverse the list to find the last node (where temp.getNext() is head).
+            while not (temp.getNext() = head) loop
                 { 
                     prev <- temp;
-                    temp <- temp.get_next();
+                    temp <- temp.getNext();
                 } pool;
             -- Remove the last node by linking the previous node directly to head.
-            prev.set_next(head);
+            prev.setNext(head);
             self;
         }fi
+    };
+    -- Print all values in the list.
+    print() : LinkedList {
+        let tempNode : Node <- head.getNext() in {
+            -- Loop until we circle back to the sentinel head.
+            while not (tempNode = head) loop {
+                out_int(tempNode.getValue());
+                out_string(" ");
+                tempNode <- tempNode.getNext();
+            } pool;
+            out_string("\n");
+            self;
+        }
     };
 };
 
@@ -186,8 +184,8 @@ class Main inherits IO {
             list.print();
             -- search for a value
             out_string("\nEnter a value to search: ");
-            let search_val : Int <- in_int() in {
-                if list.get(search_val) then
+            let val : Int <- in_int() in {
+                if list.get(val) then
                     out_string("Value found.\n")
                 else
                     out_string("Value not found.\n")
@@ -207,9 +205,8 @@ class Main inherits IO {
             -- Output the current size of the list.
             out_string("\nThe list size :");
             out_int(list.size());
-            -- Check and print whether the list is empty after removals.
-            out_string("\nRemoving all the elements of the list:");
-            if list.isEmpty() then out_string("\n the list is empty") else out_string("the list is not empty")fi;
+            -- Check and print whether the list is empty after removals.            
+            if list.isEmpty() then out_string("\n the list is empty") else out_string("\nthe list is not empty")fi;
             self;
         }
     };
