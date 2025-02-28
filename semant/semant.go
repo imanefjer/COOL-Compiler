@@ -287,11 +287,11 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 		}
 	case *ast.CaseExpression:
 		sa.analyzeExpression(e.Expression, className)
-
+		
 		// Track seen types to detect duplicates
 		seenTypes := make(map[string]bool)
 		hasObjectBranch := false
-
+		
 		for _, branch := range e.Cases {
 			if branch.Type.Value == "Object" {
 				hasObjectBranch = true
@@ -302,22 +302,37 @@ func (sa *SemanticAnalyzer) analyzeExpression(expr ast.Expression, className str
 				continue
 			}
 			seenTypes[branch.Type.Value] = true
-
+			
 			// Validate branch type
 			if !sa.symbolTable.isValidType(branch.Type.Value) {
 				sa.errors = append(sa.errors, fmt.Sprintf("line %d: undefined type %s in case branch",
 					branch.Token.Line, branch.Type.Value))
 			}
-
-			// Analyze branch expression
+			
+			// Create a new scope for each case branch
+			sa.symbolTable.EnterScope(SymbolLocal, className)
+			
+			// Add the case variable to the scope
+			sa.symbolTable.CurrentScope.Symbols[branch.Name.Value] = &Symbol{
+				Name:  branch.Name.Value,
+				Kind:  SymbolLocal,
+				Type:  branch.Type.Value,
+				Token: branch.Name.Token,
+			}
+			
+			// Analyze branch expression within this scope
 			sa.analyzeExpression(branch.Expression, className)
+			
+			// Exit case branch scope
+			sa.symbolTable.ExitScope()
 		}
-
+		
 		// Check for Object branch
 		if !hasObjectBranch {
 			sa.errors = append(sa.errors, fmt.Sprintf("line %d: case expression should have Object branch as default",
 				e.Token.Line))
 		}
+		
 	case *ast.WhileExpression:
 		sa.analyzeExpression(e.Condition, className)
 		sa.analyzeExpression(e.Body, className)
