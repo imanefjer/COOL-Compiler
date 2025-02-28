@@ -1,0 +1,29 @@
+module Math ;
+
+class Calculator {
+    add(x: Int, y: Int): Int {
+        x + y
+    };
+
+    subtract(x: Int, y: Int): Int {
+        x - y
+    };
+
+    multiply(x: Int, y: Int): Int {
+        x * y
+    };
+};
+
+class Vector {
+    x: Int;
+    y: Int;
+
+    init(a: Int, b: Int): Vector {
+        {
+            x <- a;
+            y <- b;
+            self;
+        }
+    };
+};
+

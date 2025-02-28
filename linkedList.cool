@@ -1,0 +1,216 @@
+-- Class representing a node in a circular linked list.
+class Node {
+    value : Int;    -- The integer value stored in the node.
+    next  : Node;   -- Pointer to the next node in the list.
+    
+    -- Initialize the node with a default value of 0 and set the next pointer to self.
+    init_node() : Node {
+        {
+            value <- 0;
+            next <- self;
+            self;
+        }
+    };
+    
+    -- Return the value stored in the node.
+    get_value() : Int {
+        value
+    };
+
+    -- Set the node's value to the provided integer 'v' and return the node.
+    set_value(v : Int) : Node {
+        {
+            value <- v;
+            self;
+        }
+    };
+
+    -- Return the next node.
+    get_next() : Node {
+        next
+    };
+
+    -- Set the next pointer to the given node 'n' and return the current node.
+    set_next(n : Node) : Node {
+        {
+            next <- n;
+            self;
+        }
+    };
+};
+
+-- Class for managing a circular linked list with a sentinel head node.
+class LinkedList inherits IO {
+    head : Node;   -- Sentinel node used for simplifying list operations.
+
+    -- Initialize the linked list by creating and initializing the sentinel node.
+    init() : LinkedList {
+        {
+            head <- new Node;
+            head.init_node();
+            self;
+        }
+    };
+
+    -- Add a new node at the beginning of the list with the specified value.
+    addFirst(val : Int) : LinkedList {
+        let new_node : Node <- new Node in {
+            new_node.set_value(val);
+            -- Insert new_node right after the sentinel head.
+            new_node.set_next(head.get_next());
+            head.set_next(new_node);
+            self;
+        }
+    };
+
+    -- Print all values in the list.
+    print() : LinkedList {
+        let temp : Node <- head.get_next() in {
+            -- Loop until we circle back to the sentinel head.
+            while not (temp = head) loop {
+                out_int(temp.get_value());
+                out_string(" ");
+                temp <- temp.get_next();
+            } pool;
+            out_string("\n");
+            self;
+        }
+    };
+
+    -- Add a new node at the end of the list with the specified value.
+    addLast(val : Int) : LinkedList {
+        let new_node : Node <- new Node,
+            temp : Node <- head in {
+            
+            new_node.set_value(val);
+            -- Set new_node's next pointer to head to maintain the circular structure.
+            new_node.set_next(head);
+            
+            -- Traverse the list to find the last node (node whose next is head).
+            while not (temp.get_next() = head) loop {
+                temp <- temp.get_next();
+            } pool;
+            
+            -- Link the last node to the new node.
+            temp.set_next(new_node);
+            self;
+        }
+    };
+
+    -- Search for a node containing the given value.
+    -- Returns true if found, false otherwise.
+    get(val : Int) : Bool {
+        let temp : Node <- head.get_next() in {
+            let found : Bool <- false in {
+                while not (temp = head) loop {
+                    if temp.get_value() = val then {
+                        found <- true;
+                        -- Exit loop by setting temp to head.
+                        temp <- head;
+                    } else {
+                        temp <- temp.get_next();
+                    }fi;
+                } pool;
+                found;
+            };
+        }
+    };
+
+    -- Return the number of nodes in the list (excluding the sentinel node).
+    size() : Int {
+        let count : Int <- 0 in {
+            let temp : Node <- head.get_next() in {
+                while not (temp = head) loop {
+                    count <- count + 1;
+                    temp <- temp.get_next();
+                } pool;
+            };
+            count;
+        }
+    };
+
+    -- Check if the list is empty.
+    -- The list is empty if the sentinel's next pointer points to itself.
+    isEmpty() : Bool {
+        head.get_next() = head
+    };
+
+    -- Remove the first node (immediately after the sentinel) from the list.
+    removeFirst() : LinkedList {
+        if isEmpty() then
+            self  -- Nothing to remove if the list is empty.
+        else
+            let first : Node <- head.get_next() in {
+                -- Bypass the first node by linking head directly to the second node.
+                head.set_next(first.get_next());
+                self;
+            }fi
+    };
+
+    -- Remove the last node from the list.
+    removeLast() : LinkedList {
+        if isEmpty() then
+            self  -- Nothing to remove if the list is empty.
+        else
+            let prev : Node <- head,
+                temp : Node <- head.get_next() in {
+            -- Traverse the list to find the last node (where temp.get_next() is head).
+            while not (temp.get_next() = head) loop
+                { 
+                    prev <- temp;
+                    temp <- temp.get_next();
+                } pool;
+            -- Remove the last node by linking the previous node directly to head.
+            prev.set_next(head);
+            self;
+        }fi
+    };
+};
+
+-- Main class to demonstrate usage of the LinkedList.
+class Main inherits IO {
+    main() : Object {
+        let list : LinkedList <- new LinkedList in {
+            list.init();
+            -- Check if the list is initially empty and print the result.
+            if list.isEmpty() then out_string("empty") else out_string("not empty")fi;
+            -- Insert values 5 input values from the user.
+            let i : Int in {
+                while i <= 4 loop {
+                    out_string("Enter your value :");
+                    list.addLast(in_int());
+                    i <- i + 1;
+                } pool;
+            };
+            -- Print the full list.
+            list.print();
+            -- search for a value
+            out_string("\nEnter a value to search: ");
+            let search_val : Int <- in_int() in {
+                if list.get(search_val) then
+                    out_string("Value found.\n")
+                else
+                    out_string("Value not found.\n")
+                fi;
+            };
+            -- Print the list again.
+            list.print();
+            -- Remove the first node and print the updated list.
+             out_string("\nthe list after deleting the first node : ");
+            list.removeFirst();
+            list.print();
+            
+            -- Remove the last node and print the updated list.
+            out_string("\nthe list after deleting the last node : ");
+            list.removeLast();
+            list.print();
+            -- Output the current size of the list.
+            out_string("\nThe list size :");
+            out_int(list.size());
+            -- Check and print whether the list is empty after removals.
+            out_string("\nRemoving all the elements of the list:");
+            if list.isEmpty() then out_string("\n the list is empty") else out_string("the list is not empty")fi;
+            self;
+        }
+    };
+};
