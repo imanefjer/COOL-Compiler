@@ -34,6 +34,9 @@ A Compiler for the Cool Programming Language
   - [Extensions](#extensions)
     - [Module System](#module-system)
     - [Standard Library Extension: LinkedList](#standard-library-extension-linkedlist)
+    - [Example Program](#example-program)
+      - [Program Output](#program-output)
+      - [This Example Demonstrates:](#this-example-demonstrates)
 
 ## Introduction
 **Project Background:**  
@@ -274,4 +277,89 @@ An additional extension provided in this project is a LinkedList implementation,
 - **get(index):** Retrieves the element at the specified index.
 - **size():** Returns the number of elements in the list.
 - **isEmpty():** Checks whether the list is empty.
+
+### Example Program
+
+Below is an example Cool program that demonstrates class inheritance, method overriding, and object copying:
+
+```cool
+class Animal {
+    name : String <- "Unknown";
+
+    init(n : String) : Animal {
+        {
+            name <- n;
+            self;
+        }
+    };
+
+    getName() : String {
+        name
+    };
+    
+    print() : Object {
+        (new IO).out_string("This is an animal\n")
+    };
+};
+
+class Dog inherits Animal {
+    breed : String <- "Mixed";
+
+    init(n : String) : Dog {
+        {
+            name <- n;
+            self;
+        }
+    };
+
+    getBreed() : String {
+        breed
+    };
+    
+    print() : Object {
+        (new IO).out_string("This is a dog\n")
+    };
+};
+
+class Main inherits IO {
+    main() : Object {
+        {
+            let myDog : Dog <- (new Dog).init("Buddy") in {
+                out_string("Dog name: ");
+                out_string(myDog.getName());
+                out_string("\n");
+                
+                out_string("Dog breed: ");
+                out_string(myDog.getBreed());
+                out_string("\n");
+                
+                out_string("Dog print method: ");
+                myDog.print();
+                
+                out_string("Animal print method: ");
+                myDog@Animal.print();
+                
+                out_string("Copy name: ");
+                let dogCopy : Dog <- myDog.copy() in {
+                    out_string(dogCopy.getName());
+                    out_string("\n");
+                };
+            };
+        }
+    };
+};
+```
+#### Program Output
+```
+Dog name: Buddy
+Dog breed: Mixed
+Dog print method: This is a dog
+Animal print method: This is an animal
+Copy name: Buddy
+```
+#### This Example Demonstrates:
+- Creating an instance of `Dog` and initializing it with a name.
+- Using overridden methods in the `Dog` class and inherited methods from the `Animal` class.
+- Invoking methods from both the child (`Dog`) and parent (`Animal`) classes.
+- Copying an object using the built-in `copy()` method.
 
