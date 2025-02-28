@@ -34,9 +34,9 @@ A Compiler for the Cool Programming Language
   - [Extensions](#extensions)
     - [Module System](#module-system)
     - [Standard Library Extension: LinkedList](#standard-library-extension-linkedlist)
-    - [Example Program](#example-program)
-      - [Program Output](#program-output)
-      - [This Example Demonstrates:](#this-example-demonstrates)
+  - [Example Program](#example-program)
+    - [Program Output](#program-output)
+    - [This Example Demonstrates:](#this-example-demonstrates)
 
 ## Introduction
 **Project Background:**  
