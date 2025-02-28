@@ -124,13 +124,13 @@ func (g *CodeGenerator) DeclareClasses(classes []*ast.Class) error {
 				methodName := fmt.Sprintf("%s_%s", class.Name.Value, method.Name.Value)
 				var paramTypes []types.Type
 				var retType types.Type
-				
+
 				// Handle return types based on declared type
 				switch method.ReturnType.Value {
 				case "Int":
 					retType = types.I32
 				case "Bool":
-					retType = types.I1
+					retType = types.I8
 				default:
 					retType = i8Ptr
 				}
@@ -141,7 +141,7 @@ func (g *CodeGenerator) DeclareClasses(classes []*ast.Class) error {
 				// Add other parameters
 				for _, param := range method.Parameters {
 					paramType := g.convertType(param.Type.Value)
-        			paramTypes = append(paramTypes, paramType)
+					paramTypes = append(paramTypes, paramType)
 				}
 
 				// Create function with proper signature

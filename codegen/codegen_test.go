@@ -292,7 +292,7 @@ func TestGenerateWhileExpression(t *testing.T) {
 		"br i1",     
 		"icmp",     
 		"add",       
-		"ret i32 0", 
+		"ret i8", 
 	}
 
 	// Check for each expected pattern

@@ -701,157 +701,150 @@ func (g *CodeGenerator) getOrCreateMalloc() *ir.Func {
 	// Create new malloc function if not found
 	return g.module.NewFunc("malloc", types.I8Ptr, ir.NewParam("size", types.I64))
 }
+// convertValue converts 'val' to 'destType' if needed, returning an error if conversion is not possible.
+func (g *CodeGenerator) convertValue(block *ir.Block, val value.Value, destType types.Type) (value.Value, error) {
+    // Convert i1 to i8 for boolean fields
+    if destType == types.I8 && val.Type() == types.I1 {
+        return block.NewZExt(val, types.I8), nil
+    }
+    // Convert i8 to i1 if needed
+    if destType == types.I1 && val.Type() == types.I8 {
+        return block.NewTrunc(val, types.I1), nil
+    }
+    // Convert boolean (i1 or i8) to int (i32)
+    if destType == types.I32 && (val.Type() == types.I1 || val.Type() == types.I8) {
+        return block.NewZExt(val, types.I32), nil
+    }
+    // Convert int (i32) to boolean by comparing with 0
+    if (destType == types.I1 || destType == types.I8) && val.Type() == types.I32 {
+        cmp := block.NewICmp(enum.IPredNE, val, constant.NewInt(types.I32, 0))
+        if destType == types.I8 {
+            return block.NewZExt(cmp, types.I8), nil
+        }
+        return cmp, nil
+    }
+    // If types differ, try a bit cast if both are pointers
+    if !val.Type().Equal(destType) {
+        if types.IsPointer(val.Type()) && types.IsPointer(destType) {
+            return block.NewBitCast(val, destType), nil
+        }
+        return nil, fmt.Errorf("incompatible types: %v and %v", val.Type(), destType)
+    }
+    return val, nil
+}
+
 func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value, attrType string, initExpr ast.Expression) (*ir.Block, error) {
-	// Get the destination type
-	destType := attrPtr.Type().(*types.PointerType).ElemType
+    // Get the destination type
+    destType := attrPtr.Type().(*types.PointerType).ElemType
 
-	if initExpr != nil {
-		val, currentBlock, err := g.generateExpression(block, initExpr)
-		if err != nil {
-			return currentBlock, err
-		}
-
-		// Handle String type specially
-		if g.getClassNameFromType(destType) == "String" {
-			stringType := g.classTypes["String"]
-
-			// If we have a raw i8* pointer, wrap it in a String object
-			if val.Type().Equal(types.I8Ptr) {
-				// Create new String object
-				newString := currentBlock.NewAlloca(stringType)
-
-				// Set vtable
-				vtablePtr := currentBlock.NewGetElementPtr(stringType, newString,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 0),
-				)
-				currentBlock.NewStore(
-					currentBlock.NewBitCast(g.vtables["String"], types.I8Ptr),
-					vtablePtr,
-				)
-
-				// Set value field
-				valuePtr := currentBlock.NewGetElementPtr(stringType, newString,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 1),
-				)
-				currentBlock.NewStore(val, valuePtr)
-
-				val = newString
-			}
-
-			// Cast to destination type if needed
-			if !val.Type().Equal(destType) {
-				val = currentBlock.NewBitCast(val, destType)
-			}
-
-			currentBlock.NewStore(val, attrPtr)
-			return currentBlock, nil
-		}
-
-		// Type conversion for boolean fields
-		if destType == types.I8 && val.Type() == types.I1 {
-            // Convert i1 to i8 for boolean fields
-            val = currentBlock.NewZExt(val, types.I8)
-        } else if destType == types.I1 && val.Type() == types.I8 {
-            // Convert i8 to i1 if needed
-            val = currentBlock.NewTrunc(val, types.I1)
-        } else if destType == types.I32 && (val.Type() == types.I1 || val.Type() == types.I8) {
-            // Convert boolean to int by zero-extending
-            val = currentBlock.NewZExt(val, types.I32)
-        } else if (destType == types.I1 || destType == types.I8) && val.Type() == types.I32 {
-            // Convert int to boolean by comparing with 0
-            val = currentBlock.NewICmp(enum.IPredNE, val, constant.NewInt(types.I32, 0))
-            if destType == types.I8 {
-                val = currentBlock.NewZExt(val, types.I8)
-            }
-        } else if !val.Type().Equal(destType) {
-            // For other type mismatches, try to use bit casting if both are pointer types
-            if types.IsPointer(val.Type()) && types.IsPointer(destType) {
-                val = currentBlock.NewBitCast(val, destType)
-            } else {
-                return currentBlock, fmt.Errorf("incompatible types: %v and %v", val.Type(), destType)
-            }
+    if initExpr != nil {
+        val, currentBlock, err := g.generateExpression(block, initExpr)
+        if err != nil {
+            return currentBlock, err
         }
 
-		currentBlock.NewStore(val, attrPtr)
-		return currentBlock, nil
-	}
+        // Handle String type specially
+        if g.getClassNameFromType(destType) == "String" {
+            stringType := g.classTypes["String"]
 
-	// Default initialization
-	var defaultVal value.Value
-	switch strings.ToLower(attrType) {
-	case "int":
-		defaultVal = constant.NewInt(types.I32, 0)
-	case "bool":
-		if destType == types.I8 {
+            // If we have a raw i8* pointer, wrap it in a String object
+            if val.Type().Equal(types.I8Ptr) {
+                // Create new String object
+                newString := currentBlock.NewAlloca(stringType)
+
+                // Set vtable
+               	vtablePtr := currentBlock.NewGetElementPtr(stringType, newString,
+                    constant.NewInt(types.I32, 0),
+                    constant.NewInt(types.I32, 0),
+                )
+                currentBlock.NewStore(
+                    currentBlock.NewBitCast(g.vtables["String"], types.I8Ptr),
+                    vtablePtr,
+                )
+
+                // Set value field
+               	valuePtr := currentBlock.NewGetElementPtr(stringType, newString,
+                    constant.NewInt(types.I32, 0),
+                    constant.NewInt(types.I32, 1),
+                )
+                currentBlock.NewStore(val, valuePtr)
+
+                val = newString
+            }
+
+            // Cast to destination type if needed
+            if !val.Type().Equal(destType) {
+                val = currentBlock.NewBitCast(val, destType)
+            }
+
+            currentBlock.NewStore(val, attrPtr)
+            return currentBlock, nil
+        }
+
+        // Use modular conversion logic for type conversion, including boolean fields
+        convertedVal, err := g.convertValue(currentBlock, val, destType)
+        if err != nil {
+            return currentBlock, err
+        }
+        currentBlock.NewStore(convertedVal, attrPtr)
+        return currentBlock, nil
+    }
+
+    // Default initialization if no initExpr was provided
+    var defaultVal value.Value
+    switch strings.ToLower(attrType) {
+    case "int":
+        defaultVal = constant.NewInt(types.I32, 0)
+    case "bool":
+        if destType == types.I8 {
             defaultVal = constant.NewInt(types.I8, 0)
         } else {
-            defaultVal = constant.NewInt(types.I1, 0) 
+            defaultVal = constant.NewInt(types.I1, 0)
         }
-	case "string":
-		// Create empty string
-		stringType := g.classTypes["String"]
-		obj := block.NewAlloca(stringType)
+    case "string":
+        // Create empty string
+        stringType := g.classTypes["String"]
+        obj := block.NewAlloca(stringType)
 
-		// Set vtable
-		vtablePtr := block.NewGetElementPtr(stringType, obj,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, 0),
-		)
-		block.NewStore(
-			block.NewBitCast(g.vtables["String"], i8Ptr),
-			vtablePtr,
-		)
+        // Set vtable
+        vtablePtr := block.NewGetElementPtr(stringType, obj,
+            constant.NewInt(types.I32, 0),
+            constant.NewInt(types.I32, 0),
+        )
+        block.NewStore(
+            block.NewBitCast(g.vtables["String"], i8Ptr),
+            vtablePtr,
+        )
 
-		// Set empty string value
-		emptyStr := g.getOrCreateStringConstant("\x00")
-		strPtr := block.NewGetElementPtr(
-			types.NewArray(1, types.I8),
-			emptyStr,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, 0),
-		)
-		defaultVal = strPtr
+        // Set empty string value
+        emptyStr := g.getOrCreateStringConstant("\x00")
+        strPtr := block.NewGetElementPtr(
+            types.NewArray(1, types.I8),
+            emptyStr,
+            constant.NewInt(types.I32, 0),
+            constant.NewInt(types.I32, 0),
+        )
+        defaultVal = strPtr
 
-	default:
-		if classType, exists := g.classTypes[attrType]; exists {
-			defaultVal = constant.NewNull(types.NewPointer(classType))
-		} else {
-			defaultVal = constant.NewNull(types.NewPointer(types.I8))
-		}
-	}
-
-	// Cast the default value to the correct type if needed
-	destPtrType := attrPtr.Type().(*types.PointerType)
-    if !defaultVal.Type().Equal(destPtrType.ElemType) {
-        if destPtrType.ElemType == types.I8 && defaultVal.Type() == types.I1 {
-            // Convert i1 to i8
-            defaultVal = block.NewZExt(defaultVal, types.I8)
-        } else if destPtrType.ElemType == types.I1 && defaultVal.Type() == types.I8 {
-            // Convert i8 to i1
-            defaultVal = block.NewTrunc(defaultVal, types.I1)
-        } else if destPtrType.ElemType == types.I32 && defaultVal.Type() == types.I1 {
-            // Convert boolean to int
-            defaultVal = block.NewZExt(defaultVal, types.I32)
-        } else if (destPtrType.ElemType == types.I1 || destPtrType.ElemType == types.I8) && defaultVal.Type() == types.I32 {
-            // Convert int to boolean
-            defaultVal = block.NewICmp(enum.IPredNE, defaultVal, constant.NewInt(types.I32, 0))
-            if destPtrType.ElemType == types.I8 {
-                defaultVal = block.NewZExt(defaultVal, types.I8)
-            }
-        } else if types.IsPointer(defaultVal.Type()) && types.IsPointer(destPtrType.ElemType) {
-            // Cast between pointer types
-            defaultVal = block.NewBitCast(defaultVal, destPtrType.ElemType)
+    default:
+        if classType, exists := g.classTypes[attrType]; exists {
+            defaultVal = constant.NewNull(types.NewPointer(classType))
         } else {
-            return block, fmt.Errorf("cannot initialize %s attribute: incompatible types %v and %v", 
-                                    attrType, defaultVal.Type(), destPtrType.ElemType)
+            defaultVal = constant.NewNull(types.NewPointer(types.I8))
         }
     }
 
-    block.NewStore(defaultVal, attrPtr)
+    // Cast the default value to the correct type if needed using the same conversion helper
+    destPtrType := attrPtr.Type().(*types.PointerType)
+    convertedDefault, err := g.convertValue(block, defaultVal, destPtrType.ElemType)
+    if err != nil {
+        return block, fmt.Errorf("cannot initialize %s attribute: %v", attrType, err)
+    }
+
+    block.NewStore(convertedDefault, attrPtr)
     return block, nil
 }
+
 
 func (g *CodeGenerator) getOrCreateStringConstant(name string) *ir.Global {
 	sanitizedName := strings.Map(func(r rune) rune {
