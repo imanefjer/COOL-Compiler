@@ -278,7 +278,7 @@ An additional extension provided in this project is a LinkedList implementation,
 - **size():** Returns the number of elements in the list.
 - **isEmpty():** Checks whether the list is empty.
 
-### Example Program
+## Example Program
 
 Below is an example Cool program that demonstrates class inheritance, method overriding, and object copying:
 
