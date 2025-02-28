@@ -7,11 +7,11 @@ import (
 )
 
 // PrintAST prints the AST in a tree structure
-func PrintAST(program *ast.Program) string {
+func (p *Parser) PrintAST(program *ast.Program) string {
 	var sb strings.Builder
 	sb.WriteString("AST Tree:\n")
 	sb.WriteString("└── Program\n")
-	
+
 	// Print each class
 	for i, class := range program.Classes {
 		prefix := "    ├── "
@@ -23,18 +23,18 @@ func PrintAST(program *ast.Program) string {
 		if i == len(program.Classes)-1 {
 			classPrefix = "        "
 		}
-		
+
 		if class.Parent != nil {
 			sb.WriteString(classPrefix + "├── Parent: " + class.Parent.Value + "\n")
 		}
-		
+
 		// Print features
 		for j, feature := range class.Features {
 			featurePrefix := classPrefix + "├── "
 			if j == len(class.Features)-1 {
 				featurePrefix = classPrefix + "└── "
 			}
-			
+
 			switch f := feature.(type) {
 			case *ast.Method:
 				sb.WriteString(featurePrefix + "Method: " + f.Name.Value + "\n")
@@ -42,9 +42,9 @@ func PrintAST(program *ast.Program) string {
 				if j == len(class.Features)-1 {
 					methodPrefix = classPrefix + "    "
 				}
-				
+
 				sb.WriteString(methodPrefix + "├── ReturnType: " + f.ReturnType.Value + "\n")
-				
+
 				// Print parameters
 				if len(f.Parameters) > 0 {
 					sb.WriteString(methodPrefix + "├── Parameters:\n")
@@ -56,11 +56,11 @@ func PrintAST(program *ast.Program) string {
 						sb.WriteString(paramPrefix + param.Name.Value + ": " + param.Type.Value + "\n")
 					}
 				}
-				
+
 				// Print body
 				sb.WriteString(methodPrefix + "└── Body:\n")
 				sb.WriteString(printExpression(f.Body, methodPrefix+"    "))
-				
+
 			case *ast.Attribute:
 				sb.WriteString(featurePrefix + "Attribute: " + f.Name.Value + "\n")
 				attrPrefix := classPrefix + "│   "
@@ -80,26 +80,26 @@ func PrintAST(program *ast.Program) string {
 
 func printExpression(exp ast.Expression, indent string) string {
 	var sb strings.Builder
-	
+
 	switch node := exp.(type) {
 	case *ast.IntegerLiteral:
 		sb.WriteString(indent + "└── Integer: " + fmt.Sprintf("%d", node.Value) + "\n")
-		
+
 	case *ast.StringLiteral:
 		sb.WriteString(indent + "└── String: " + node.Value + "\n")
-		
+
 	case *ast.BooleanLiteral:
 		sb.WriteString(indent + "└── Boolean: " + fmt.Sprintf("%t", node.Value) + "\n")
-		
+
 	case *ast.ObjectIdentifier:
 		sb.WriteString(indent + "Identifier: " + node.Value + "\n")
-		
+
 	case *ast.Assignment:
 		sb.WriteString(indent + "Assignment\n")
 		sb.WriteString(indent + "    ├── Name: " + node.Name.Value + "\n")
 		sb.WriteString(indent + "    └── Value:\n")
 		sb.WriteString(printExpression(node.Expression, indent+"        "))
-		
+
 	case *ast.MethodCall:
 		sb.WriteString(indent + "└── MethodCall\n")
 		sb.WriteString(indent + "    ├── Object:\n")
@@ -114,17 +114,17 @@ func printExpression(exp ast.Expression, indent string) string {
 				sb.WriteString(printExpression(arg, indent+"        "))
 			}
 		}
-		
+
 	case *ast.BlockExpression:
-        sb.WriteString(indent + "└── Block\n")
-        for i, expr := range node.Expressions {
-            exprPrefix := "├── "
-            if i == len(node.Expressions)-1 {
-                exprPrefix = "└── "
-            }
-            sb.WriteString(printExpression(expr, indent+"    "+exprPrefix))
-        }
-		
+		sb.WriteString(indent + "└── Block\n")
+		for i, expr := range node.Expressions {
+			exprPrefix := "├── "
+			if i == len(node.Expressions)-1 {
+				exprPrefix = "└── "
+			}
+			sb.WriteString(printExpression(expr, indent+"    "+exprPrefix))
+		}
+
 	case *ast.IfExpression:
 		sb.WriteString(indent + "└── If\n")
 		sb.WriteString(indent + "    ├── Condition:\n")
@@ -133,26 +133,26 @@ func printExpression(exp ast.Expression, indent string) string {
 		sb.WriteString(printExpression(node.Consequence, indent+"    │   "))
 		sb.WriteString(indent + "    └── Else:\n")
 		sb.WriteString(printExpression(node.Alternative, indent+"        "))
-		
+
 	case *ast.WhileExpression:
 		sb.WriteString(indent + "└── While\n")
 		sb.WriteString(indent + "    ├── Condition:\n")
 		sb.WriteString(printExpression(node.Condition, indent+"    │   "))
 		sb.WriteString(indent + "    └── Body:\n")
 		sb.WriteString(printExpression(node.Body, indent+"        "))
-		
+
 	case *ast.LetExpression:
 		sb.WriteString(indent + "└── Let\n")
 		sb.WriteString(indent + "    ├── Bindings:\n")
 		bindingPrefix := indent + "    │   "
-		
+
 		// Print first binding
 		sb.WriteString(bindingPrefix + "├── " + node.Name.Value + ": " + node.Type.Value + "\n")
 		if node.Init != nil {
 			sb.WriteString(bindingPrefix + "│   └── Init:\n")
 			sb.WriteString(printExpression(node.Init, bindingPrefix+"    "))
 		}
-		
+
 		// Print additional bindings
 		for i, binding := range node.Bindings {
 			prefix := bindingPrefix + "├── "
@@ -169,10 +169,10 @@ func printExpression(exp ast.Expression, indent string) string {
 				sb.WriteString(printExpression(binding.Init, initPrefix+"    "))
 			}
 		}
-		
+
 		sb.WriteString(indent + "    └── Body:\n")
 		sb.WriteString(printExpression(node.Body, indent+"        "))
-		
+
 	case *ast.CaseExpression:
 		sb.WriteString(indent + "└── Case\n")
 		sb.WriteString(indent + "    ├── Expression:\n")
@@ -186,29 +186,29 @@ func printExpression(exp ast.Expression, indent string) string {
 			sb.WriteString(prefix + c.Name.Value + ": " + c.Type.Value + " =>\n")
 			sb.WriteString(printExpression(c.Expression, indent+"            "))
 		}
-		
+
 	case *ast.NewExpression:
 		sb.WriteString(indent + "└── New: " + node.Type.Value + "\n")
-		
+
 	case *ast.IsVoidExpression:
 		sb.WriteString(indent + "└── IsVoid\n")
 		sb.WriteString(printExpression(node.Expression, indent+"    "))
-		
+
 	case *ast.NotExpression:
 		sb.WriteString(indent + "└── Not\n")
 		sb.WriteString(printExpression(node.Expression, indent+"    "))
-		
+
 	case *ast.NegExpression:
 		sb.WriteString(indent + "└── Negation\n")
 		sb.WriteString(printExpression(node.Expression, indent+"    "))
-		
+
 	case *ast.InfixExpression:
 		sb.WriteString(indent + "└── Infix: " + node.Operator + "\n")
 		sb.WriteString(indent + "    ├── Left:\n")
 		sb.WriteString(printExpression(node.Left, indent+"    │   "))
 		sb.WriteString(indent + "    └── Right:\n")
 		sb.WriteString(printExpression(node.Right, indent+"        "))
-		
+
 	case *ast.FunctionCall:
 		sb.WriteString(indent + "└── FunctionCall: " + node.Function.Value + "\n")
 		if len(node.Arguments) > 0 {
@@ -221,10 +221,10 @@ func printExpression(exp ast.Expression, indent string) string {
 				sb.WriteString(printExpression(arg, argPrefix))
 			}
 		}
-		
+
 	default:
 		sb.WriteString(indent + "└── Unknown: " + fmt.Sprintf("%T", node) + "\n")
 	}
-	
+
 	return sb.String()
 }
