@@ -46,7 +46,6 @@ func (g *CodeGenerator) handleSpecialMethods(block *ir.Block, e *ast.MethodCall,
 
 // Generate code for the type_name method
 func (g *CodeGenerator) generateTypeNameMethod(block *ir.Block, receiverType string) (value.Value, *ir.Block, error) {
-	// For primitive types (Bool, Int), use Object's type_name implementation
 	methodName := "Object_type_name"
 	methodFunc := g.methods[methodName]
 
@@ -124,7 +123,7 @@ func (g *CodeGenerator) generateRegularMethodCall(block *ir.Block, e *ast.Method
 	
 	// Handle void returns
 	if result.Type() == types.Void {
-		// For void returns, add unreachable if needed
+		// For void returns
 		if block.Term == nil {
 			block.NewUnreachable()
 		}
@@ -152,7 +151,6 @@ func (g *CodeGenerator) generateMethodCallArguments(block *ir.Block, e *ast.Meth
 		}
 		block = newBlock
 		
-		// Cast if needed
 		if ptrType, ok := argVal.Type().(*types.PointerType); ok {
 			if _, isObject := g.classTypes[g.getClassNameFromType(ptrType)]; isObject {
 				argVal = block.NewBitCast(argVal, types.I8Ptr)
@@ -261,7 +259,6 @@ func (g *CodeGenerator) boxBool(block *ir.Block, boolVal value.Value) (value.Val
     }
     
     if fieldType.Equal(types.I32) {
-        // If Bool.val is defined as i32, extend the value
         if boolVal.Type() == types.I1 {
             boolVal = block.NewZExt(boolVal, types.I32)
         } else if boolVal.Type() == types.I8 {
@@ -269,7 +266,6 @@ func (g *CodeGenerator) boxBool(block *ir.Block, boolVal value.Value) (value.Val
         }
         block.NewStore(boolVal, valuePtr)
     } else if fieldType.Equal(types.I8) {
-        // If Bool.val is defined as i8, convert as needed
         if boolVal.Type() == types.I1 {
             boolVal = block.NewZExt(boolVal, types.I8)
         } else if boolVal.Type() == types.I32 {
@@ -279,7 +275,6 @@ func (g *CodeGenerator) boxBool(block *ir.Block, boolVal value.Value) (value.Val
         }
         block.NewStore(boolVal, valuePtr)
     } else if fieldType.Equal(types.I1) {
-        // If Bool.val is defined as i1, convert to i1 if needed
         if boolVal.Type() == types.I8 {
             boolVal = block.NewICmp(enum.IPredNE, boolVal, constant.NewInt(types.I8, 0))
         } else if boolVal.Type() == types.I32 {
@@ -385,7 +380,6 @@ func (g *CodeGenerator) handlePrimitiveCases(cases []*ast.Case, testBlocks []*ir
 		// Handle case body
 		caseResult, bodyBlock, err := g.handleSingleCase(caseBlock, caseItem, target, caseItem.Type.Value)
 		if err != nil {
-			// Just skip this case if there's an error
 			continue
 		}
 
@@ -664,8 +658,6 @@ func (g *CodeGenerator) getOrCreateMemset() *ir.Func {
 	ir.NewParam("isvolatile", types.I1))
 }
 func (g *CodeGenerator)isBuiltin(typ types.Type) bool {
-	 // Depending on your LLVM type mapping for COOL: 
-	 // For example, assume Int is I32 and Bool is I1. 
 	 if typ.Equal(types.I32) || typ.Equal(types.I1) { 
 		return true } 
 		if typ.Equal(g.classTypes["String"]) { 
@@ -698,9 +690,9 @@ func (g *CodeGenerator) getOrCreateMalloc() *ir.Func {
 			return f
 		}
 	}
-	// Create new malloc function if not found
 	return g.module.NewFunc("malloc", types.I8Ptr, ir.NewParam("size", types.I64))
 }
+
 // convertValue converts 'val' to 'destType' if needed, returning an error if conversion is not possible.
 func (g *CodeGenerator) convertValue(block *ir.Block, val value.Value, destType types.Type) (value.Value, error) {
     // Convert i1 to i8 for boolean fields
@@ -834,7 +826,6 @@ func (g *CodeGenerator) initializeAttribute(block *ir.Block, attrPtr value.Value
         }
     }
 
-    // Cast the default value to the correct type if needed using the same conversion helper
     destPtrType := attrPtr.Type().(*types.PointerType)
     convertedDefault, err := g.convertValue(block, defaultVal, destPtrType.ElemType)
     if err != nil {
@@ -886,10 +877,8 @@ func (g *CodeGenerator) convertType(typeName string) types.Type {
     case "int":
         return types.I32
     case "bool":
-        // Use i8 instead of i1 for better memory alignment
         return types.I8
     default:
-        // For user-defined types, pointer to their struct type
         if classType, exists := g.classTypes[typeName]; exists {
             return types.NewPointer(classType)
         } else {
@@ -898,7 +887,6 @@ func (g *CodeGenerator) convertType(typeName string) types.Type {
     }
 }
 func (g *CodeGenerator) generateIOMethodCall(block *ir.Block, methodName string, selfObj value.Value, args ...value.Value) (value.Value, *ir.Block, error) {
-    // Cast the self pointer to i8* if needed
     var selfPtr value.Value
     if _, ok := selfObj.Type().(*types.PointerType); ok {
         selfPtr = block.NewBitCast(selfObj, types.I8Ptr)
@@ -950,13 +938,10 @@ func (g *CodeGenerator) GetVTables() map[string]*ir.Global {
 }
 
 
-// Add this to your helpers.go file
 func (g *CodeGenerator) processStringLiteral(value string) string {
-    // Handle escape sequences
     processed := strings.Builder{}
     for i := 0; i < len(value); i++ {
         if value[i] == '\\' && i+1 < len(value) {
-            // Handle escape sequence
             switch value[i+1] {
             case 'n':
                 processed.WriteByte('\n')
@@ -967,11 +952,9 @@ func (g *CodeGenerator) processStringLiteral(value string) string {
             case '"':
                 processed.WriteByte('"')
             default:
-                // For non-standard escape sequences like \H, 
-                // just include the character (H in this case)
                 processed.WriteByte(value[i+1])
             }
-            i++ // Skip the next character as it's part of the escape sequence
+            i++ 
         } else {
             processed.WriteByte(value[i])
         }
