@@ -4,8 +4,6 @@ A Compiler for the Cool Programming Language
 
 ## Table of Contents
 - [Cool Compiler](#cool-compiler)
-  - [Table of Contents](#table-of-contents)
-  - [Introduction](#introduction)
   - [Features Implemented](#features-implemented)
     - [Lexer](#lexer)
     - [Example: Lexer Output](#example-lexer-output)
