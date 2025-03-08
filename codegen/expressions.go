@@ -299,28 +299,20 @@ func (g *CodeGenerator) generateIfExpression(block *ir.Block, e *ast.IfExpressio
 	}
 	elseCurrentBlock.NewBr(mergeBlock)
 
-	// FIX HERE: Check if any of the values is an integer and we're expecting a pointer
 	if !thenVal.Type().Equal(elseVal.Type()) {
-		// Handle i8 (Bool) and i32 (Int) mismatches
 		if thenVal.Type() == types.I8 && elseVal.Type() == types.I32 {
-			// Convert i8 to i32
 			thenVal = mergeBlock.NewZExt(thenVal, types.I32)
 		} else if thenVal.Type() == types.I32 && elseVal.Type() == types.I8 {
-			// Convert i8 to i32
 			elseVal = mergeBlock.NewZExt(elseVal, types.I32)
 		} else if types.IsPointer(thenVal.Type()) && elseVal.Type() == types.I32 {
-			// If 'then' is a pointer and 'else' is an integer, convert integer to null pointer
 			if ptrType, ok := thenVal.Type().(*types.PointerType); ok {
 				elseVal = constant.NewNull(ptrType)
 			}
 		} else if thenVal.Type() == types.I32 && types.IsPointer(elseVal.Type()) {
-			// If 'then' is an integer and 'else' is a pointer, convert integer to null pointer
 			if ptrType, ok := elseVal.Type().(*types.PointerType); ok {
 				thenVal = constant.NewNull(ptrType)
 			}
 		} else if types.IsPointer(thenVal.Type()) && types.IsPointer(elseVal.Type()) {
-			// If both are pointers but of different types, use bitcast to make them the same type
-			// Choose the more specific type (not Object) if possible
 			if g.getClassNameFromType(thenVal.Type()) == "Object" {
 				thenVal = mergeBlock.NewBitCast(thenVal, elseVal.Type())
 			} else {
