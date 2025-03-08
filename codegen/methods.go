@@ -645,7 +645,6 @@ func (g *CodeGenerator) generateRegularMethod(className string, method *ast.Meth
         }
     }
 
-    // Add explicit terminator for entry block if needed
     if entryBlock.Term == nil {
         entryBlock.NewBr(currentBlock)
     }
