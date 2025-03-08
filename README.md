@@ -38,12 +38,6 @@ A Compiler for the Cool Programming Language
     - [Program Output](#program-output)
     - [This Example Demonstrates:](#this-example-demonstrates)
 
-## Introduction
-**Project Background:**  
-_Provide a brief description of the project's motivation and goals._
-
-**Language Description:**  
-_Explain what the Cool language is and its key features (e.g., classes, inheritance, expressions)._
 
 ## Features Implemented
 ### Lexer
