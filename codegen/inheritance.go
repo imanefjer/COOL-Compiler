@@ -86,7 +86,6 @@ func (g *CodeGenerator) BuildClassTable(classes []*ast.Class) error {
 						return fmt.Errorf("attribute %s redefined in class %s", f.Name.Value, class.Name.Value)
 					}
 				}
-				// Add local attribute without setting Offset here
 				info.Attributes = append(info.Attributes, AttributeInfo{
 					Name:   f.Name.Value,
 					Type:   f.Type.Value,
